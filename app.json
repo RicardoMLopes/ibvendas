@@ -1,0 +1,79 @@
+{
+  "expo": {
+    "name": "ibvendas",
+    "slug": "ibvendas",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./src/static/img/logo/empresa_2.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./src/static/img/logo/empresa_2.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "plugins": [
+        [
+          "expo-sqlite",
+          {
+            "enableFTS": true,
+            "useSQLCipher": true,
+            "ios": {
+              "customBuildFlags": [
+                "-DSQLITE_ENABLE_DBSTAT_VTAB=1 -DSQLITE_ENABLE_SNAPSHOT=1"
+              ]
+            }
+          }
+        ]
+      ]
+    },
+    "android": {
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.SCHEDULE_EXACT_ALARM",
+        "android.settings.REQUEST_MANAGE_MEDIA",
+        "android.intent.action.OPEN_DOCUMENT",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.VIBRATE",
+        "android.permission.INTERNET",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_MEDIA_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.MANAGE_MEDIA"
+      ],
+      "adaptiveIcon": {
+        "foregroundImage": "./src/static/img/logo/empresa_2.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.ricardolopes.ibvendas",
+      "plugins": [
+        [
+          "expo-sqlite",
+          {
+            "enableFTS": false,
+            "useSQLCipher": false
+          }
+        ]
+      ]
+    },
+    "web": {
+      "favicon": "./src/static/img/logo/empresa_2.png"
+    },
+    "plugins": [],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "4dd368c9-76f3-44b8-b764-eb0c611ac32f"
+      }
+    },
+    "owner": "ricardolopes"
+  }
+}
