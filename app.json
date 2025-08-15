@@ -3,12 +3,12 @@
     "name": "ibvendas",
     "slug": "ibvendas",
     "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./src/static/img/logo/empresa_2.png",
+    "orientation": "portrait",    
+    "icon": "./src/static/img/logo/empresa.jpg",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "splash": {
-      "image": "./src/static/img/logo/empresa_2.png",
+      "image": "./src/static/img/logo/empresa.jpg",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -21,6 +21,7 @@
             "enableFTS": true,
             "useSQLCipher": true,
             "ios": {
+              "autoIncrement": true,
               "customBuildFlags": [
                 "-DSQLITE_ENABLE_DBSTAT_VTAB=1 -DSQLITE_ENABLE_SNAPSHOT=1"
               ]
@@ -30,6 +31,7 @@
       ]
     },
     "android": {
+      "autoIncrement": true,
       "usesCleartextTraffic": true,
       "permissions": [
         "android.permission.SCHEDULE_EXACT_ALARM",
@@ -49,7 +51,7 @@
         "android.permission.MANAGE_MEDIA"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./src/static/img/logo/empresa_2.png",
+        "foregroundImage": "./src/static/img/logo/empresa.jpg",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -65,7 +67,7 @@
       ]
     },
     "web": {
-      "favicon": "./src/static/img/logo/empresa_2.png"
+      "favicon": "./src/static/img/logo/empresa.jpg"
     },
     "plugins": [],
     "extra": {

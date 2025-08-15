@@ -30,7 +30,7 @@ interface Pedido {
 // Função para carregar o logo e converter em base64
 async function carregarLogoBase64(): Promise<string | null> {
   try {
-    const asset = Asset.fromModule(require('../static/img/logo/empresa_2.png'));
+    const asset = Asset.fromModule(require('../static/img/logo/empresa.jpg'));
     await asset.downloadAsync();
 
     const base64 = await FileSystem.readAsStringAsync(asset.localUri ?? '', {

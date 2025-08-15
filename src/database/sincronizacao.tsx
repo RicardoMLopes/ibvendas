@@ -2199,6 +2199,7 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
       };
 
       try {
+        
         const response = await api.post('pedidos', payload);
         if (response.status === 200) {
           await database.runAsync(
