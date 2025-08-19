@@ -1,6 +1,9 @@
 import axios, { AxiosError } from 'axios';
 import * as Crypto from 'expo-crypto';
 import Configs from '../config/configs';
+import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system';
+
 
 const SALT = Configs.SECRET_KEY
 
@@ -116,27 +119,21 @@ export async function validarSenhaExpo(senhaDigitada: string, hashArmazenado: st
 // Função para recuperar valor de armazenamento local
 type AsyncFunction<T, P = any> = (param?: P) => Promise<T>;
 
-interface RetryOptions {
-  tentativas?: number;       // Máximo de tentativas
-  delay?: number;            // Tempo inicial em ms
-  factor?: number;           // Multiplicador do backoff exponencial
-  jitter?: boolean;          // Se true, adiciona variação aleatória ao delay
-  onRetry?: (tentativa: number, error: any, nextDelay: number) => void; // Callback a cada falha
+export interface RetryOptions {
+  tentativas?: number;
+  delay?: number;
+  factor?: number;
+  jitter?: boolean;
+  onRetry?: (tentativa: number, error: any, waitTime: number) => void;
 }
 
+
 export async function retryWithBackoff<T, P = any>(
-  fn: AsyncFunction<T, P>,
+  fn: (param?: P) => Promise<T>,
   param?: P,
   options: RetryOptions = {}
 ): Promise<T> {
-  const {
-    tentativas = 5,
-    delay = 500,
-    factor = 2,
-    jitter = true,
-    onRetry,
-  } = options;
-
+  const { tentativas = 5, delay = 500, factor = 2, jitter = true, onRetry } = options;
   let tentativa = 0;
   let currentDelay = delay;
 
@@ -148,16 +145,36 @@ export async function retryWithBackoff<T, P = any>(
       if (tentativa >= tentativas) throw error;
 
       let waitTime = currentDelay;
-      if (jitter) {
-        waitTime = Math.random() * currentDelay; // backoff com jitter
-      }
+      if (jitter) waitTime = Math.random() * currentDelay;
 
       if (onRetry) onRetry(tentativa, error, waitTime);
 
-      await new Promise((resolve) => setTimeout(resolve, waitTime));
-      currentDelay *= factor; // aumento exponencial do delay
+      await new Promise(res => setTimeout(res, waitTime));
+      currentDelay *= factor;
     }
   }
 
   throw new Error('Falha na execução com retry');
+}
+
+
+
+export async function carregarLogoBase64(): Promise<string | null> {
+  try {
+    const asset = Asset.fromModule(require('../../assets/empresa.jpg'));
+    await asset.downloadAsync(); // garante que o asset está disponível
+
+    // Usa localUri ou uri, ambos funcionam no APK e no Expo Go
+    const caminho = asset.localUri ?? asset.uri;
+    if (!caminho) return null;
+
+    const base64 = await FileSystem.readAsStringAsync(caminho, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    return base64;
+  } catch (error) {
+    console.warn('Erro ao carregar logo base64:', error);
+    return null;
+  }
 }

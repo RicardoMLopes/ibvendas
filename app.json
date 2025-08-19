@@ -3,10 +3,13 @@
     "name": "ibvendas",
     "slug": "ibvendas",
     "version": "1.0.0",
-    "orientation": "portrait",    
+    "orientation": "portrait",
     "icon": "./src/static/img/logo/empresa.jpg",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
+    "assetBundlePatterns": [
+      "assets/**/*"
+    ],
     "splash": {
       "image": "./src/static/img/logo/empresa.jpg",
       "resizeMode": "contain",
@@ -69,7 +72,9 @@
     "web": {
       "favicon": "./src/static/img/logo/empresa.jpg"
     },
-    "plugins": [],
+    "plugins": [
+      "react-native-edge-to-edge"
+    ],
     "extra": {
       "router": {},
       "eas": {

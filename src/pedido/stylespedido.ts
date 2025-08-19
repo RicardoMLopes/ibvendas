@@ -72,7 +72,7 @@ rodape: {
 },
   botaoCancelar: {
     flex: 1,
-    backgroundColor: 'rgba(246, 0, 0, 0.5)', // vermelho com 50% de opacidade
+    backgroundColor: 'rgba(245, 130, 7, 0.5)', // vermelho com 50% de opacidade
     padding: 12,
     borderRadius: 8,
     marginRight: 8,

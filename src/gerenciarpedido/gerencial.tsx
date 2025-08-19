@@ -171,25 +171,33 @@ export default function GerenciarPedidos() {
     }
   }
 
-  async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
-    try {
-      setLoading(true);
-      const { sincronizarPedidosSelecionados } = await useSyncEmpresa();
-      const sucesso = await sincronizarPedidosSelecionados([pedido.numerodocumento]);
-      if (sucesso) {
-        Alert.alert('Sucesso', `Pedido ${pedido.numerodocumento} enviado com sucesso!`);
-        pesquisar(); // Atualiza lista
-      } else {
-        Alert.alert('Erro', `Falha ao enviar pedido ${pedido.numerodocumento}`);
-      }
-    } catch (err) {
-      console.error('Erro ao enviar pedido:', err);
-      Alert.alert('Erro', 'Falha ao enviar pedido.');
-    } finally {
-      setLoading(false);
-      fecharModal();
+async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
+  try {
+    setLoading(true);
+    const { sincronizarPedidosSelecionados } = await useSyncEmpresa();
+    const sucesso = await sincronizarPedidosSelecionados([pedido.numerodocumento]);
+
+    if (sucesso) {
+      Alert.alert('Sucesso', `Pedido ${pedido.numerodocumento} enviado com sucesso!`);
+      pesquisar(); // Atualiza lista
+      fecharModal(); // fecha apenas no sucesso
+    } else {
+      Alert.alert(
+        'Erro',
+        `Não foi possível enviar o pedido ${pedido.numerodocumento}. Tente novamente.`
+      );
     }
+  } catch (err) {
+    console.error('Erro ao enviar pedido:', err);
+    Alert.alert(
+      'Erro',
+      'Ocorreu uma falha inesperada ao enviar o pedido. Por favor, tente novamente.'
+    );
+  } finally {
+    setLoading(false);
   }
+}
+
 
   return (
     <KeyboardAvoidingView

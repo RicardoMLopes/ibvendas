@@ -1,6 +1,6 @@
 // src/services/axios.js
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+//import AsyncStorage from '@react-native-async-storage/async-storage';
 import { obterTokenCNPJ } from '../config/tokenmanager'; // Importando a função para obter o token CNPJ
 
 
@@ -9,7 +9,7 @@ const api = axios.create({
   baseURL: 'https://servidor-64qt.onrender.com/',
 // baseURL: 'http://192.168.100.40:8000/', // Substitua pela sua base URL
 //  baseURL: 'http://192.168.0.182:8000/', // Substitua pela sua base URL
-  timeout: 10000,
+  timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },

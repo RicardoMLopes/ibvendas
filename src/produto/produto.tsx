@@ -77,6 +77,15 @@ export default function ListarProdutos(props: ListarProdutosProps) {
   const [modalVisivel, setModalVisivel] = useState(false);
   const [produtosAdicionados, setProdutosAdicionados] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
+  const [filtroVisivel, setFiltroVisivel] = useState(false);
+  const [agrupamentoFiltro, setAgrupamentoFiltro] = useState('');
+  const [codigoBarraFiltro, setCodigoBarraFiltro] = useState('');
+  const [unidadeFiltro, setUnidadeFiltro] = useState('');
+  const [precoMin, setPrecoMin] = useState('');
+  const [precoMax, setPrecoMax] = useState('');
+  const [filter, setfilter] =  useState<Produto[]>([]);
+
+
 
   useEffect(() => {
     const carregarImagens = async () => {
@@ -109,6 +118,8 @@ export default function ListarProdutos(props: ListarProdutosProps) {
       });
 
       setProdutos(itensComValorVenda);
+      setfilter(itensComValorVenda); // mostra todos inicialmente
+
 
       if (permitirSelecao) {
         const empresaString = await recuperarValor('@empresa');
@@ -208,11 +219,45 @@ export default function ListarProdutos(props: ListarProdutosProps) {
     atualizarHeader();
   }, [produtosAdicionados, permitirSelecao, navigation, codigocliente]);
 
-  const filtrados = produtos.filter((item) =>
-    item.descricao.toLowerCase().includes(busca.toLowerCase()) ||
-    item.codigobarra.includes(busca) ||
-    item.agrupamento?.toLowerCase().includes(busca.toLowerCase())
-  );
+
+  useEffect(() => {
+    const resultado = produtos.filter((item) => {
+      const preco = item.valorunitariovenda ?? item.precovenda;
+
+      const correspondeBusca =
+        !busca ||
+        item.descricao?.toLowerCase().includes(busca.toLowerCase()) ||
+        item.codigobarra?.includes(busca) ||
+        item.agrupamento?.toLowerCase().includes(busca.toLowerCase());
+
+      const correspondeAgrupamento =
+        !agrupamentoFiltro || item.agrupamento?.toLowerCase().includes(agrupamentoFiltro.toLowerCase());
+
+      const correspondeCodigo =
+        !codigoBarraFiltro || item.codigobarra?.includes(codigoBarraFiltro);
+
+      const correspondeUnidade =
+        !unidadeFiltro || item.unidadeMedida?.toLowerCase().includes(unidadeFiltro.toLowerCase());
+
+      const precoMinNum = parseFloat(precoMin);
+      const precoMaxNum = parseFloat(precoMax);
+
+      const correspondePrecoMin = isNaN(precoMinNum) || preco >= precoMinNum;
+      const correspondePrecoMax = isNaN(precoMaxNum) || preco <= precoMaxNum;
+
+      return (
+        correspondeBusca &&
+        correspondeAgrupamento &&
+        correspondeCodigo &&
+        correspondeUnidade &&
+        correspondePrecoMin &&
+        correspondePrecoMax
+      );
+    });
+
+    setfilter(resultado);
+  }, [busca, agrupamentoFiltro, codigoBarraFiltro, unidadeFiltro, precoMin, precoMax, produtos]);
+
 
   const lidarComClique = (item: Produto) => {
     if (permitirSelecao) {
@@ -305,9 +350,7 @@ const compartilharImagem = async () => {
   }
 };
 
-
-
-
+   
     return (
       <View style={[styles.card, foiAdicionado && styles.cardSelecionado]}>
         <View style={styles.item}>
@@ -365,6 +408,9 @@ const compartilharImagem = async () => {
           value={busca}
           onChangeText={setBusca}
         />
+        <TouchableOpacity style={styles.botaoFiltro} onPress={() => setFiltroVisivel(true)}>
+          <Ionicons name="filter" size={20} color="#5f6368" />
+        </TouchableOpacity>
       </View>
 
       {loading ? (
@@ -379,7 +425,7 @@ const compartilharImagem = async () => {
         </View>
       ) : (
         <FlatList
-          data={filtrados}
+          data={filter}
           keyExtractor={(item) => `${item.codigo}-${acrescimo}`} 
           renderItem={({ item }) => <ItemCard item={item} />}
           ItemSeparatorComponent={() => <View style={styles.separador} />}
@@ -415,6 +461,63 @@ const compartilharImagem = async () => {
           nomecliente={nomecliente}
         />
       )}
+
+      <Modal visible={filtroVisivel} transparent animationType="slide">
+        <View style={styles.modalFiltro}>
+          <View style={styles.modalContent}>
+            <Text style={styles.tituloModal}>🔍 Filtros Avançados</Text>
+
+            <TextInput
+              style={styles.inputModal}
+              placeholder="Agrupamento"
+              value={agrupamentoFiltro}
+              onChangeText={setAgrupamentoFiltro}
+            />
+
+            <TextInput
+              style={styles.inputModal}
+              placeholder="Código de Barra"
+              value={codigoBarraFiltro}
+              onChangeText={setCodigoBarraFiltro}
+              keyboardType="numeric"
+            />
+
+            <TextInput
+              style={styles.inputModal}
+              placeholder="Unidade de Medida"
+              value={unidadeFiltro}
+              onChangeText={setUnidadeFiltro}
+            />
+
+            <View style={styles.linhaPreco}>
+              <TextInput
+                style={[styles.inputModal, { flex: 1, marginRight: 5 }]}
+                placeholder="Preço Mínimo"
+                value={precoMin}
+                onChangeText={setPrecoMin}
+                keyboardType="numeric"
+              />
+              <TextInput
+                style={[styles.inputModal, { flex: 1, marginLeft: 5 }]}
+                placeholder="Preço Máximo"
+                value={precoMax}
+                onChangeText={setPrecoMax}
+                keyboardType="numeric"
+              />
+            </View>
+
+            <View style={styles.botoesModal}>
+              <TouchableOpacity style={styles.botaoModal} onPress={() => setFiltroVisivel(false)}>
+                <Text style={styles.textoBotaoModal}>Aplicar Filtros</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.botaoModal, { backgroundColor: '#ccc' }]} onPress={() => setFiltroVisivel(false)}>
+                <Text style={[styles.textoBotaoModal, { color: '#333' }]}>Cancelar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }

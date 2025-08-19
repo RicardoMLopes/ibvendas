@@ -99,6 +99,63 @@ imagem: {
     height: '80%',
   },
 
+  modalFiltro: {
+  flex: 1,
+  backgroundColor: 'rgba(0,0,0,0.5)',
+  justifyContent: 'center',
+  alignItems: 'center',
+},
+modalContent: {
+  width: '90%',
+  backgroundColor: '#fff',
+  borderRadius: 12,
+  padding: 20,
+  elevation: 10,
+},
+tituloModal: {
+  fontSize: 20,
+  fontWeight: 'bold',
+  marginBottom: 15,
+  textAlign: 'center',
+  color: '#333',
+},
+inputModal: {
+  borderWidth: 1,
+  borderColor: '#ccc',
+  borderRadius: 8,
+  paddingHorizontal: 12,
+  paddingVertical: 10,
+  marginBottom: 12,
+  fontSize: 16,
+  backgroundColor: '#f9f9f9',
+},
+linhaPreco: {
+  flexDirection: 'row',
+  justifyContent: 'space-between',
+},
+botoesModal: {
+  flexDirection: 'row',
+  justifyContent: 'space-around',
+  marginTop: 20,
+},
+botaoModal: {
+  paddingVertical: 10,
+  paddingHorizontal: 20,
+  backgroundColor: '#1976D2',
+  borderRadius: 8,
+},
+textoBotaoModal: {
+  color: '#fff',
+  fontWeight: 'bold',
+  fontSize: 16,
+},
+botaoFiltro: {
+  marginLeft: 10,
+  padding: 8,
+  backgroundColor: '#e0e0e0',
+  borderRadius: 8,
+},
+
 
 
 });

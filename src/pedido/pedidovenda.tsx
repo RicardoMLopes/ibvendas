@@ -7,6 +7,7 @@ import {
   Modal,
   TextInput,
   Alert,
+  ActivityIndicator
 } from 'react-native';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,7 +37,8 @@ interface CabecalhoPedido {
   valorDespesas: number;
   valorFrete: number;
   valorTotal: string;
-  observacao?: string;
+  Observacao?: string; 
+  enviado?: boolean;
 }
 
 const TelaPedido: React.FC = () => {
@@ -49,6 +51,7 @@ const TelaPedido: React.FC = () => {
   const [vendedor, setVendedor] = useState('');
   const [cabecalho, setCabecalho] = useState<CabecalhoPedido | null>(null);
   const [loading, setLoading] = useState(true);
+  const [pedidoEnviado, setPedidoEnviado] = useState(false); // novo estado
 
   const [modalObsVisivel, setModalObsVisivel] = useState(false);
   const [modalDescontoVisivel, setModalDescontoVisivel] = useState(false);
@@ -59,6 +62,7 @@ const TelaPedido: React.FC = () => {
   const [itemSelecionado, setItemSelecionado] = useState<ItemPedido | null>(null);
 
   const [modalConfirmacaoVisivel, setModalConfirmacaoVisivel] = useState(false);
+  const [enviando, setEnviando] = useState(false); // spinner de envio
 
   const CNPJ = route.params.cnpj;
 
@@ -81,6 +85,7 @@ const TelaPedido: React.FC = () => {
       setCabecalho(cabecalho);
       setItens(itensComCasas);
       setObservacao(cabecalho.Observacao ?? '');
+      setPedidoEnviado(cabecalho.enviado ?? false); // define se já foi enviado
     } catch (error) {
       console.error('Erro ao recarregar pedido:', error);
     } finally {
@@ -191,7 +196,7 @@ const TelaPedido: React.FC = () => {
   const salvarPedidoRodape = async () => {
     try {
       await recarregarPedido();
-      Alert.alert('Sucesso', 'Pedido salvo e recarregado com sucesso.');
+      // mensagem de sucesso removida
     } catch (error) {
       console.error('Erro ao salvar pedido:', error);
       Alert.alert('Erro', 'Ocorreu um erro ao salvar o pedido.');
@@ -199,25 +204,44 @@ const TelaPedido: React.FC = () => {
   };
 
   const salvarSomente = async () => {
-    await salvarPedidoRodape();
-    setModalConfirmacaoVisivel(false);
+    if (pedidoEnviado) {
+      Alert.alert('Aviso', 'Pedido já foi enviado e não pode ser alterado.');
+      return;
+    }
+    setEnviando(true);
+    try {
+      await salvarPedidoRodape();
+      setModalConfirmacaoVisivel(false);
+    } catch (error) {
+      console.error('Erro ao salvar pedido:', error);
+      Alert.alert('Erro', 'Não foi possível salvar o pedido.');
+    } finally {
+      setEnviando(false);
+    }
   };
 
   const salvarEEnviar = async () => {
+    if (pedidoEnviado) {
+      Alert.alert('Aviso', 'Pedido já foi enviado e não pode ser alterado.');
+      return;
+    }
+    setEnviando(true);
     try {
       await salvarPedidoRodape();
       const { sincronizarPedidosSelecionados } = await useSyncEmpresa();
       const sucesso = await sincronizarPedidosSelecionados([cd_pedido]);
       if (sucesso) {
-        Alert.alert('Sucesso', 'Pedido salvo e enviado com sucesso.');
+        Alert.alert('Sucesso', 'Pedido enviado com sucesso.');
+        setPedidoEnviado(true);
+        setModalConfirmacaoVisivel(false);
       } else {
-        Alert.alert('Erro', 'Falha ao enviar o pedido.');
+        Alert.alert('Erro', 'Falha ao enviar o pedido. Tente novamente.');
       }
     } catch (error) {
       console.error('Erro ao enviar pedido:', error);
-      Alert.alert('Erro', 'Não foi possível enviar o pedido.');
+      Alert.alert('Erro', 'Não foi possível enviar o pedido. Tente novamente.');
     } finally {
-      setModalConfirmacaoVisivel(false);
+      setEnviando(false);
     }
   };
 
@@ -333,9 +357,16 @@ const TelaPedido: React.FC = () => {
       {/* Rodapé */}
       <View style={styles.rodape}>
         <TouchableOpacity style={styles.botaoCancelar} onPress={() => navigation.navigate({ name: 'home', params: { cnpj: CNPJ } })}>
-          <Text style={styles.TextBottun}>Cancelar</Text>
+          <Text style={styles.TextBottun}>Voltar</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.botaoFaturar} onPress={() => setModalConfirmacaoVisivel(true)}>
+        <TouchableOpacity
+          style={[styles.botaoFaturar, pedidoEnviado && { opacity: 0.5 }]}
+          onPress={() => {
+            if (!pedidoEnviado) setModalConfirmacaoVisivel(true);
+            else Alert.alert('Aviso', 'Pedido já foi enviado e não pode ser alterado.');
+          }}
+          disabled={pedidoEnviado}
+        >
           <Text style={styles.TextBottun}>Salvar</Text>
         </TouchableOpacity>
       </View>
@@ -347,27 +378,38 @@ const TelaPedido: React.FC = () => {
             <Text style={[styles.modalTitulo, { marginBottom: 20 }]}>
               O que deseja fazer?
             </Text>
+
             <TouchableOpacity
-  style={[styles.modalBotaoBase, styles.modalBotaoEnviar, { marginBottom: 10 }]}
-  onPress={salvarEEnviar}
->
-            <Text style={styles.TextBottun}>Salvar e Enviar</Text>
-                </TouchableOpacity>
+              style={[styles.modalBotaoBase, styles.modalBotaoEnviar, { marginBottom: 10 }]}
+              onPress={salvarEEnviar}
+              disabled={enviando}
+            >
+              {enviando ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.TextBottun}>Salvar e Enviar</Text>
+              )}
+            </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.modalBotaoBase, styles.modalBotaoSalvar]}
-                  onPress={salvarSomente}
-                >
-                  <Text style={styles.TextBottun}>Somente Salvar</Text>
-                </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.modalBotaoBase, styles.modalBotaoSalvar]}
+              onPress={salvarSomente}
+              disabled={enviando}
+            >
+              {enviando ? (
+                <ActivityIndicator color="#000" />
+              ) : (
+                <Text style={styles.TextBottun}>Somente Salvar</Text>
+              )}
+            </TouchableOpacity>
 
-                <TouchableOpacity
-                  style={[styles.modalBotaoBase, styles.modalBotaoCancelar, { marginTop: 15 }]}
-                  onPress={() => setModalConfirmacaoVisivel(false)}
-                >
-                  <Text style={styles.TextBottun}>Cancelar</Text>
-                </TouchableOpacity>
-
+            <TouchableOpacity
+              style={[styles.modalBotaoBase, styles.modalBotaoCancelar, { marginTop: 15 }]}
+              onPress={() => setModalConfirmacaoVisivel(false)}
+              disabled={enviando}
+            >
+              <Text style={styles.TextBottun}>Cancelar</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -385,7 +427,7 @@ const TelaPedido: React.FC = () => {
               placeholder="Digite a observação..."
             />
             <TouchableOpacity onPress={salvarObservacao} style={styles.botaoModalFechar}>
-              <Text>Salvar</Text>
+              <Text style={{fontWeight:"bold",color:"#fff", fontSize:18}}>Salvar</Text>
             </TouchableOpacity>
           </View>
         </View>

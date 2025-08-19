@@ -57,8 +57,8 @@ export const loadingStyles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   animation: {
-    width: 160,
-    height: 160,
+    width: 360,
+    height: 360,
   },
   message: {
     marginTop: 20,

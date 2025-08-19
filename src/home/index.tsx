@@ -1,22 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, Image, Animated, Alert } from 'react-native';
-import { styles, loadingStyles, overlayStyles } from './style'; // seus estilos existentes
+import { styles, loadingStyles, overlayStyles } from './style';
 import { useSyncEmpresa } from '../database/sincronizacao';
 import LottieView from 'lottie-react-native';
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { adicionarValor, recuperarValor } from '../scripts/adicionarourecuperar';
-import { retryWithBackoff } from '../scripts/funcoes';
 import SyncLogPanel from '../logs/logssincronizacao';
 import AnimatedMessage from './animatemensage';
 import { useNavigation } from '@react-navigation/native';
 
 type RootStackParamList = {
   home: { cnpj: string };
-  listaritens: {
-    formaId: number;
-    permitirSelecao?: boolean;
-    exibirModal?: boolean;
-  };
+  listaritens: { formaId: number; permitirSelecao?: boolean; exibirModal?: boolean };
   listarcliente: undefined;
   SyncOptions: undefined;
   GerenciarPedidos: undefined;
@@ -24,15 +19,46 @@ type RootStackParamList = {
 
 type Props = NativeStackScreenProps<RootStackParamList, 'home'>;
 
+export interface RetryOptions {
+  tentativas?: number;
+  delay?: number;
+  factor?: number;
+  jitter?: boolean;
+  onRetry?: (tentativa: number, error: any, waitTime: number) => void;
+}
+
+export async function retryWithBackoff<T, P = any>(
+  fn: (param?: P) => Promise<T>,
+  param?: P,
+  options: RetryOptions = {}
+): Promise<T> {
+  const { tentativas = 3, delay = 1000, factor = 2, jitter = true, onRetry } = options;
+  let tentativa = 0;
+  let currentDelay = delay;
+
+  while (tentativa < tentativas) {
+    try {
+      return await fn(param);
+    } catch (error) {
+      tentativa++;
+      if (tentativa >= tentativas) throw error;
+
+      let waitTime = currentDelay;
+      if (jitter) waitTime = Math.random() * currentDelay;
+      if (onRetry) onRetry(tentativa, error, waitTime);
+
+      await new Promise(res => setTimeout(res, waitTime));
+      currentDelay *= factor;
+    }
+  }
+  throw new Error('Falha na execução com retry');
+}
+
 const LoadingOverlay: React.FC<{ message: string }> = ({ message }) => {
   const [fadeAnim] = useState(new Animated.Value(0));
 
   useEffect(() => {
-    Animated.timing(fadeAnim, {
-      toValue: 1,
-      duration: 400,
-      useNativeDriver: true,
-    }).start();
+    Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
   }, []);
 
   return (
@@ -51,8 +77,7 @@ const LoadingOverlay: React.FC<{ message: string }> = ({ message }) => {
 const Home: React.FC<Props> = ({ route, navigation }) => {
   const [mensagem, setMensagem] = useState('');
   const [loading, setLoading] = useState(false);
-  const [nomeEmpresa, setNomeEmpresa] = useState('Minha Empresa LTDA'); // fallback
-  const [Vendedor, setVendedor] = useState<string | null>(null);
+  const [nomeEmpresa, setNomeEmpresa] = useState('Minha Empresa LTDA'); 
   const [syncLogs, setSyncLogs] = useState<string[]>([]);
   const [showLog, setShowLog] = useState(false);
   const [totaisSincronizacao, setTotaisSincronizacao] = useState<Record<string, any>>({});
@@ -63,21 +88,13 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
   useEffect(() => {
     async function carregarNomeEmpresa() {
       try {
-        const {buscarVendedorDoUsuario} = await useSyncEmpresa();
-        
+        const { buscarVendedorDoUsuario } = await useSyncEmpresa();
         const usuarioId = await recuperarValor('@IDUSER');
-      //  console.log('🔍 ID do usuário:', usuarioId);
         const resultado = await buscarVendedorDoUsuario(Number(usuarioId));
         adicionarValor('@CodigoVendedor', resultado!.codigo!.toString());
         adicionarValor('@Vendedor', resultado!.nome!.toString());
         const nome = await recuperarValor('@nomeEmpresa');
-        
-
-        if (nome) {
-          setNomeEmpresa(nome);
-        } else {
-          setNomeEmpresa('Minha Empresa LTDA');
-        }
+        setNomeEmpresa(nome || 'Minha Empresa LTDA');
       } catch (error) {
         console.error('Erro ao recuperar nome da empresa:', error);
         setNomeEmpresa('Minha Empresa LTDA');
@@ -90,29 +107,40 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
     setSyncLogs(prev => [...prev, mensagem]);
   }
 
-  // Função auxiliar para rodar cada passo da sincronização com retry opcional e abortar ao erro
   async function executarSincronizacao<T>(
     nome: string,
     func: () => Promise<T>,
     mensagemLoading: string,
-    retry = false,
-    tentativas = 3,
-    delayMs = 1000
+    retry = false
   ): Promise<T> {
+    setMensagem(mensagemLoading);
+    adicionarLog(`▶️ Iniciando sincronização de ${nome}...`);
+
     try {
-      adicionarLog(`▶️ Iniciando sincronização de ${nome}...`);
-      setMensagem(mensagemLoading);
-      const resultado = retry
-        ? await retryWithBackoff(func, tentativas)
-        : await func();
-      adicionarLog(`✅ ${nome} sincronizados`);
-      setTotaisSincronizacao(prev => ({ ...prev, [nome.toLowerCase()]: resultado }));
+      const resultado = retry ? await retryWithBackoff(func) : await func();
+
+      // normaliza para objeto compatível com SyncLogPanel
+      let totalObj: any = {};
+      if (resultado && typeof resultado === 'object' && 'totalProcessados' in resultado) {
+        totalObj = resultado as any;
+      } else if (typeof resultado === 'number') {
+        totalObj = { total: resultado };
+      } else {
+        totalObj = { total: 0 };
+      }
+
+      setTotaisSincronizacao(prev => ({
+        ...prev,
+        [nome.toLowerCase()]: totalObj
+      }));
+
+      adicionarLog(`✅ ${nome} sincronizados com sucesso.`);
       return resultado;
-    } catch (error) {
-      adicionarLog(`❌ Falha na sincronização de ${nome}.`);
+    } catch (error: any) {
+      adicionarLog(`❌ Falha na sincronização de ${nome}: ${error?.message || 'Erro desconhecido'}`);
       setMensagem(`Falha ao sincronizar ${nome}. Tente novamente mais tarde.`);
       setLoading(false);
-      throw error; // aborta a execução da sincronização
+      throw error;
     }
   }
 
@@ -130,7 +158,6 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
       sincronizarCondicoesPagamento,
       sincronizarVendedores,
       sincronizarImagens,
-      
     } = await useSyncEmpresa();
 
     try {
@@ -140,11 +167,10 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
       await executarSincronizacao('Formas de Pagamento', sincronizarCondicoesPagamento, 'Cadastro de forma de pgtos sincronizando....', false);
       await executarSincronizacao('Vendedores', sincronizarVendedores, 'Cadastro de vendedores sincronizando....', true);
       await executarSincronizacao('Imagens', sincronizarImagens, 'Imagens estão sincronizando....', false);
-    } catch (error) {
-      // O erro já foi logado e mensagem setada na função executarSincronizacao
-      setLoading(false);
+    } catch {
       setShowLog(true);
-      return; // interrompe a sincronização
+      setLoading(false);
+      return;
     }
 
     setLoading(false);
@@ -153,20 +179,16 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
 
   return (
     <View style={styles.container}>
-      {/* Título da empresa */}
       {!loading && <Text style={styles.mainTitle}>{nomeEmpresa}</Text>}
 
-      {/* Overlay para mensagem animada durante loading */}
       {loading && (
         <View style={overlayStyles.animatedMessageOverlay}>
           <AnimatedMessage message="Vamos tomar um café? Uma pausa saborosa que faz toda a diferença!" />
         </View>
       )}
 
-      {/* Loading animation */}
       {loading && <LoadingOverlay message={`👉 ${mensagem}`} />}
 
-      {/* Botões e painel de logs */}
       {!loading && (
         <>
           <View style={styles.optionsContainer}>
@@ -193,15 +215,8 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
                   'Confirmação',
                   'Deseja sincronizar todos os dados de uma vez?',
                   [
-                    {
-                      text: 'Não',
-                      onPress: () => navigations.navigate('SyncOptions'),
-                      style: 'cancel',
-                    },
-                    {
-                      text: 'Sim',
-                      onPress: RodarZincronizacao,
-                    },
+                    { text: 'Não', onPress: () => navigations.navigate('SyncOptions'), style: 'cancel' },
+                    { text: 'Sim', onPress: RodarZincronizacao },
                   ],
                   { cancelable: false }
                 );
@@ -222,7 +237,6 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
             </TouchableOpacity>
           </View>
 
-          {/* SyncLogPanel */}
           {showLog && (syncLogs.length > 0 || Object.keys(totaisSincronizacao).length > 0) && (
             <SyncLogPanel
               logs={syncLogs}

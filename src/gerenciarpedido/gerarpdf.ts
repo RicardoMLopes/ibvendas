@@ -3,6 +3,9 @@ import * as Sharing from 'expo-sharing';
 import { format } from 'date-fns';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
+import { carregarLogoBase64 } from '../scripts/funcoes';
+
+
 
 interface ItemPedido {
   codigobarra: string;
@@ -27,21 +30,6 @@ interface Pedido {
   valortotal: number;
 }
 
-// Função para carregar o logo e converter em base64
-async function carregarLogoBase64(): Promise<string | null> {
-  try {
-    const asset = Asset.fromModule(require('../static/img/logo/empresa.jpg'));
-    await asset.downloadAsync();
-
-    const base64 = await FileSystem.readAsStringAsync(asset.localUri ?? '', {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    return base64;
-  } catch (error) {
-    console.warn('Erro ao carregar logo base64:', error);
-    return null;
-  }
-}
 
 export async function gerarPdfPedido(pedido: Pedido) {
   const dataEmissao = format(new Date(), 'dd/MM/yyyy HH:mm');
@@ -49,16 +37,14 @@ export async function gerarPdfPedido(pedido: Pedido) {
   let dataLancamentoFormatada = '';
   if (pedido.datalancamento) {
     const dataObj = new Date(pedido.datalancamento);
-    if (!isNaN(dataObj.getTime())) {
-      dataLancamentoFormatada = format(dataObj, 'dd/MM/yyyy HH:mm:ss');
-    } else {
-      dataLancamentoFormatada = pedido.datalancamento; // fallback
-    }
+    dataLancamentoFormatada = !isNaN(dataObj.getTime())
+      ? format(dataObj, 'dd/MM/yyyy HH:mm:ss')
+      : pedido.datalancamento;
   }
 
   const logoBase64 = await carregarLogoBase64();
   const logoImg = logoBase64
-    ? `<img src="data:image/png;base64,${logoBase64}" class="logo" />`
+    ? `<img src="data:image/jpeg;base64,${logoBase64}" class="logo" />`
     : `<img src="https://via.placeholder.com/80" class="logo" />`;
 
   const html = `
@@ -71,24 +57,11 @@ export async function gerarPdfPedido(pedido: Pedido) {
           table { width: 100%; border-collapse: collapse; margin-top: 10px; }
           th, td { border: 1px solid #000; padding: 4px; text-align: left; font-size: 11px; }
           th { background: #eee; }
-          .totais {
-            margin-top: 10px;
-            display: flex;
-            justify-content: space-between;
-            font-size: 12px;
-          }
-          .pagamento-vendedor {
-            flex: 1;
-            text-align: left;
-            font-weight: bold;
-          }
-          .valores-totais {
-            flex: 1;
-            text-align: right;
-          }
-          .valores-totais > div {
-            margin-bottom: 4px;
-          }
+          .totais { margin-top: 10px; display: flex; justify-content: space-between; font-size: 12px; }
+          .pagamento-vendedor { flex: 1; text-align: left; border-bottom: 1px solid #000; }
+          .pagamento-vendedor div { margin-bottom: 4px; }
+          .valores-totais { flex: 1; text-align: right; }
+          .valores-totais > div { margin-bottom: 4px; }
           .assinatura { margin-top: 40px; text-align: center; }
         </style>
       </head>
@@ -154,8 +127,16 @@ export async function gerarPdfPedido(pedido: Pedido) {
     </html>
   `;
 
-  const { uri } = await Print.printToFileAsync({ html });
+  const nomeArquivo = `Pedido_${pedido.nomecliente.replace(/\s+/g, '_')}.pdf`;
+  const { uri } = await Print.printToFileAsync({ html, base64: false });
+  const novoCaminho = FileSystem.documentDirectory + nomeArquivo;
+
+  await FileSystem.moveAsync({
+    from: uri,
+    to: novoCaminho,
+  });
+
   if (await Sharing.isAvailableAsync()) {
-    await Sharing.shareAsync(uri);
+    await Sharing.shareAsync(novoCaminho);
   }
 }

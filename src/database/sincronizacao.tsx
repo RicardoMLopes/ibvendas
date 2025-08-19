@@ -6,6 +6,7 @@ import { criarPastaImagens } from '../scripts/criarpasta';
 import { baixarImagem } from '../scripts/criarpasta';
 import DatabaseManager from '../database/databasemanager';
 import { formatarDataRegistro, sanitizarNumero, tentarRequisicao } from "../scripts/funcoes";
+import { id } from "date-fns/locale";
 
 type ImagemServidor = string;
 
@@ -1197,10 +1198,10 @@ interface PedidoItem {
 }
 
 async function GravarPedidos(pedido: Pedido): Promise<void> {
-//  console.log("Dados do pedido: ", pedido);
   try {
     await database.runAsync("BEGIN TRANSACTION");
 
+    // Validações básicas
     if (!pedido.empresa) throw new Error("Empresa não informada.");
     if (!pedido.codigocondpagamento) throw new Error("Forma de pagamento não informada.");
     if (!pedido.codigovendedor) throw new Error("Vendedor não informado.");
@@ -1210,6 +1211,7 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
 
     let numerodocumento: number;
 
+    // Verifica se já existe pedido em aberto
     const result = await database.getFirstAsync<{ numerodocumento: number }>(
       `SELECT numerodocumento FROM movnota WHERE empresa = ? AND codigocliente = ? AND status = 'P' LIMIT 1`,
       [pedido.empresa, pedido.codigocliente]
@@ -1218,21 +1220,19 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
     if (result) {
       numerodocumento = result.numerodocumento;
 
-      const updateNotaQuery = `
+      await database.runAsync(`
         UPDATE movnota SET
           codigocondPagamento = ?, codigovendedor = ?, codigocliente = ?, nomecliente = ?,
           valorDesconto = ?, valorDespesas = ?, valorFrete = ?, pesoTotal = ?,
           observacao = ?, dataLancamento = ?, dataRegistro = ?, situacaoregistro = "A" 
         WHERE empresa = ? AND numerodocumento = ? 
-      `;
-
-      await database.runAsync(updateNotaQuery, [
+      `, [
         pedido.codigocondpagamento,
         pedido.codigovendedor,
         pedido.codigocliente,
         pedido.nomecliente ?? '',
-        pedido.vrdesconto ?? 0,
-        pedido.vrdespesas ?? 0,
+        Math.round((pedido.vrdesconto ?? 0) * 100) / 100,
+        Math.round((pedido.vrdespesas ?? 0) * 100) / 100,
         pedido.valorFrete ?? 0,
         pedido.pesototal ?? 0,
         pedido.observacao ?? '',
@@ -1242,39 +1242,32 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
         numerodocumento
       ]);
 
-      console.log("✏️ movnota atualizada (sem valorTotal ainda).");
-
     } else {
       numerodocumento = await gerarnumerodocumento(pedido.empresa, pedido.codigocliente);
-   //   console.log("Código pedido gerado: ", numerodocumento);
 
-      const insertNotaQuery = `
+      await database.runAsync(`
         INSERT INTO movnota (
           empresa, numerodocumento, codigocondPagamento, codigovendedor, codigocliente, nomecliente,
           valorDesconto, valorDespesas, valorFrete, valorTotal, pesoTotal,
           observacao, status, dataLancamento, dataRegistro
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `;
-
-      await database.runAsync(insertNotaQuery, [
+      `, [
         pedido.empresa,
         numerodocumento,
         pedido.codigocondpagamento,
         pedido.codigovendedor,
         pedido.codigocliente,
         pedido.nomecliente ?? '',
-        pedido.vrdesconto ?? 0,
-        pedido.vrdespesas ?? 0,
+        Math.round((pedido.vrdesconto ?? 0) * 100) / 100,
+        Math.round((pedido.vrdespesas ?? 0) * 100) / 100,
         pedido.valorFrete ?? 0,
-        0,
+        0, // valorTotal será calculado após os itens
         pedido.pesototal ?? 0,
         pedido.observacao ?? '',
         pedido.status ?? 'A',
         formatarDataRegistro(pedido.datalancamento ?? new Date().toISOString()),
         formatarDataRegistro(pedido.dataregistro)
       ]);
-
-      console.log("✅ movnota inserida (valorTotal será calculado após os itens).");
     }
 
     const selectItemQuery = `
@@ -1285,13 +1278,7 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
 
     const updateItemQuery = `
       UPDATE movnotaitem SET
-        quantidade = ?,
-        valorUnitario = ?,
-        valorunitariovenda = ?,
-        valorDesconto = ?,
-        valoracrescimo = ?,
-        valorTotal = ?,
-        situacaoregistro = "A"
+        quantidade = ?, valorUnitario = ?, valorunitariovenda = ?, valorDesconto = ?, valoracrescimo = ?, valorTotal = ?, situacaoregistro = "A"
       WHERE empresa = ? AND numerodocumento = ? AND codigoproduto = ? AND codigocliente = ?
     `;
 
@@ -1303,13 +1290,19 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `;
 
+    // Função auxiliar para calcular valor total do item
+    function calcularValorTotalItem(qtd: number, venda: number, desc: number, acr: number) {
+      const vendaCalc = Math.round(venda * 100) / 100; // arredonda apenas para cálculo
+      const descCalc = Math.round(desc * 100) / 100;
+      const acrCalc = Math.round(acr * 100) / 100;
+      return Math.round((qtd * vendaCalc + acrCalc - descCalc) * 100) / 100;
+    }
+
     for (const [index, item] of pedido.itens.entries()) {
       if (!item.codigoproduto) throw new Error(`Produto não informado no item ${index + 1}.`);
       if (!item.quantidade || item.quantidade <= 0) throw new Error(`Quantidade inválida no item ${index + 1}.`);
       if (item.valorunitario == null || item.valorunitario < 0) throw new Error(`Valor unitário inválido no item ${index + 1}.`);
-      if (item.valorunitariovenda == null || item.valorunitariovenda < 0) throw new Error(`Valor unitário inválido no item ${index + 1}.`);
-      if (item.valortotal == null || item.valortotal < 0) console.warn(`⚠️ Valor total indefinido no item ${index + 1}.`);
-      if (!item.codigocliente) console.warn(`⚠️ Código do cliente ausente no item ${index + 1}.`);
+      if (item.valorunitariovenda == null || item.valorunitariovenda < 0) throw new Error(`Valor unitário de venda inválido no item ${index + 1}.`);
 
       const itemExistente = await database.getFirstAsync<{
         quantidade: number;
@@ -1322,27 +1315,28 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
         pedido.empresa, numerodocumento, item.codigoproduto, item.codigocliente ?? ''
       ]);
 
+      const descontoArred = Math.round((item.valordesconto ?? 0) * 100) / 100;
+      const acrescimoArred = Math.round((item.valoracrescimo ?? 0) * 100) / 100;
+
       if (itemExistente) {
         const novaQuantidade = itemExistente.quantidade + item.quantidade;
-        const valorUnitario = item.valorunitario;
-        const valorunitariovenda = item.valorunitariovenda;
-        const valorDesconto = item.valordesconto ?? 0;
-        const valoracrescimo = item.valoracrescimo ?? 0;
-        const novoValorTotal = Number(((novaQuantidade * valorunitariovenda) + valoracrescimo - valorDesconto ).toFixed(2));
+        const valorTotalItem = calcularValorTotalItem(novaQuantidade, item.valorunitariovenda, descontoArred, acrescimoArred);
 
         await database.runAsync(updateItemQuery, [
           novaQuantidade,
-          valorUnitario,
-          valorunitariovenda,
-          valorDesconto,
-          valoracrescimo,
-          novoValorTotal,
-          pedido.empresa, numerodocumento, item.codigoproduto, item.codigocliente ?? ''
+          item.valorunitario,
+          item.valorunitariovenda, // mantém original
+          descontoArred,
+          acrescimoArred,
+          valorTotalItem,
+          pedido.empresa,
+          numerodocumento,
+          item.codigoproduto,
+          item.codigocliente ?? ''
         ]);
 
-     //   console.log(`✏️ Item atualizado: ${item.codigoproduto}`);
       } else {
-        const valorTotalItem = Number(((item.valorunitariovenda * item.quantidade) + (item.valoracrescimo ?? 0) - (item.valordesconto ?? 0)).toFixed(2));
+        const valorTotalItem = calcularValorTotalItem(item.quantidade, item.valorunitariovenda, descontoArred, acrescimoArred);
 
         await database.runAsync(insertItemQuery, [
           pedido.empresa,
@@ -1351,39 +1345,38 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
           item.codigoproduto,
           item.descricaoproduto ?? '',
           item.valorunitario,
-          item.valorunitariovenda,
-          item.valordesconto ?? 0,
-          item.valoracrescimo ?? 0,
+          item.valorunitariovenda, // mantém original
+          descontoArred,
+          acrescimoArred,
           valorTotalItem,
           item.quantidade,
           formatarDataRegistro(pedido.dataregistro),
           item.codigocliente ?? ''
         ]);
-
-     //   console.log(`✅ Item inserido: ${item.codigoproduto}`);
       }
     }
 
+    // Atualiza valorTotal do pedido
     const resultadoTotal = await database.getFirstAsync<{ total: number }>(
-      `
-      SELECT SUM((quantidade * valorunitariovenda) + valoracrescimo - valorDesconto) AS total
-      FROM movnotaitem
-      WHERE empresa = ? AND numerodocumento = ?
-      `,
+      `SELECT IFNULL(SUM(
+         ROUND(quantidade * ROUND(valorunitariovenda, 2), 2)
+         + ROUND(valoracrescimo, 2)
+         - ROUND(valorDesconto, 2)
+       ), 0) AS total
+       FROM movnotaitem
+       WHERE empresa = ? AND numerodocumento = ?`,
       [pedido.empresa, numerodocumento]
     );
 
     const totalItens = resultadoTotal?.total ?? 0;
-    const desconto = pedido.vrdesconto ?? 0;
-    const despesas = pedido.vrdespesas ?? 0;
-    const valorTotalFinal = Number((totalItens - desconto + despesas).toFixed(2));
+    const descontoPedido = Math.round((pedido.vrdesconto ?? 0) * 100) / 100;
+    const despesasPedido = Math.round((pedido.vrdespesas ?? 0) * 100) / 100;
+    const valorTotalFinal = Math.round((totalItens - descontoPedido + despesasPedido) * 100) / 100;
 
     await database.runAsync(
-      `UPDATE movnota SET valorTotal = ? WHERE empresa = ? AND numerodocumento = ? `, 
+      `UPDATE movnota SET valorTotal = ? WHERE empresa = ? AND numerodocumento = ?`,
       [valorTotalFinal, pedido.empresa, numerodocumento]
     );
-
-  //  console.log("🔁 valorTotal atualizado com base nos itens + despesas - desconto:", valorTotalFinal);
 
     await database.runAsync("COMMIT");
     console.log("✅ Pedido e itens salvos com sucesso!");
@@ -1394,6 +1387,7 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
     throw error;
   }
 }
+
 
 
 
@@ -1424,7 +1418,8 @@ interface CabecalhoPedido {
   valorDespesas: number;
   valorFrete: number;
   valorTotal: string; // formatado com 2 casas decimais
-  Observacao: string;
+  Observacao?: string;
+  enviado?: boolean;
 }
 
 async function carregarPedidoCompleto(empresa: number, numerodocumento: number) {
@@ -1613,9 +1608,16 @@ const excluirItemPedido = async (
     // 3. Recalcula o valor total dos itens ativos (valorunitariovenda - valordesconto + valoracrescimo)
     const somaItens = await database.getFirstAsync<{ total: number }>(
       `SELECT 
-         IFNULL(SUM((quantidade * valorunitariovenda) - valordesconto + valoracrescimo), 0) as total 
+         IFNULL(SUM(
+           ROUND(quantidade * ROUND(valorunitariovenda, 2), 2)
+           - ROUND(valordesconto, 2)
+           + ROUND(valoracrescimo, 2)
+         ), 0) as total
        FROM movnotaitem
-       WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND situacaoregistro <> 'E'`,
+       WHERE empresa = ? 
+         AND numerodocumento = ? 
+         AND codigocliente = ? 
+         AND situacaoregistro <> 'E'`,
       [empresa, numerodocumento, codigocliente]
     );
     
@@ -1626,7 +1628,7 @@ const excluirItemPedido = async (
     if (valorTotalArredondado === 0) {
       // 4. Se não houver mais itens ativos, marca o cabeçalho do pedido como excluído (situacaoregistro = 'E') e zera valorTotal
       await database.runAsync(
-        `UPDATE movnota SET situacaoregistro = 'E', valorTotal = 0
+        `UPDATE movnota SET situacaoregistro = 'E'
          WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ?`,
         [empresa, numerodocumento, codigocliente]
       );
@@ -1634,7 +1636,7 @@ const excluirItemPedido = async (
       // 5. Atualiza o valorTotal na movnota com o valor calculado
       await database.runAsync(
         `UPDATE movnota SET valorTotal = ? 
-         WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ?`,
+         WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND situacaoregistro <> 'E'` ,
         [valorTotalArredondado, empresa, numerodocumento, codigocliente]
       );
     }
@@ -1735,12 +1737,16 @@ const atualizarObservacao = async (
   observacao: string
 ): Promise<boolean> => {
   try {
+    if(observacao.trim().length === 0) {
     await database.runAsync(
       `UPDATE movnota
        SET observacao = ?, situacaoregistro = "A"
        WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND status = "P"`,
       [observacao, empresa, numerodocumento, codigocliente]
     );
+      return true;
+    }
+    
     return true;
   } catch (error) {
     console.error('Erro ao atualizar observação:', error);
@@ -2013,6 +2019,7 @@ async function buscarVendedorDoUsuario(usuarioId: number): Promise<Vendedor | nu
 
 
 type MovNota = {
+  id: number;
   empresa: number;
   numerodocumento: number;
   codigocondPagamento: string;
@@ -2033,6 +2040,7 @@ type MovNota = {
 };
 
 type MovNotaItem = {
+  id: number;
   empresa: number;
   numerodocumento: number;
   codigovendedor: string;
@@ -2070,6 +2078,7 @@ async function sincronizarTodosPedidos() {
       )) as MovNotaItem[];
 
       const payload = {
+        idpedido: nota.id, // Adicionando ID para rastreamento
         empresa: nota.empresa,
         numerodocumento: nota.numerodocumento,
         codigocondPagamento: nota.codigocondPagamento,
@@ -2087,6 +2096,7 @@ async function sincronizarTodosPedidos() {
         dataLancamento: nota.dataLancamento,
         dataRegistro: nota.dataRegistro,
         itens: itens.map((item: MovNotaItem) => ({
+          idpedido: item.id, // Adicionando ID do item para rastreamento
           empresa: item.empresa,
           numerodocumento: item.numerodocumento,
           codigovendedor: item.codigovendedor,
@@ -2165,6 +2175,7 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
       )) as MovNotaItem[];
 
       const payload = {
+        idpedido: nota.id, // Adicionando ID para rastreamento
         empresa: nota.empresa,
         numerodocumento: nota.numerodocumento,
         codigocondPagamento: nota.codigocondPagamento,
@@ -2182,6 +2193,7 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
         dataLancamento: nota.dataLancamento,
         dataRegistro: nota.dataRegistro,
         itens: itens.map((item: MovNotaItem) => ({
+          idpedido: item.id, // Adicionando ID do item para rastreamento
           empresa: item.empresa,
           numerodocumento: item.numerodocumento,
           codigovendedor: item.codigovendedor,

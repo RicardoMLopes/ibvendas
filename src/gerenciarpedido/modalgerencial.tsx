@@ -18,6 +18,10 @@ export default function ModalPedidoAcoes({
   onEnviar,
   onGerarPDF,
 }: ModalPedidoAcoesProps) {
+  if (!pedido) return null;
+
+  const podeEnviar = pedido.status === 'P'; // só pode enviar se for pendente
+
   return (
     <Modal
       visible={visible}
@@ -28,7 +32,7 @@ export default function ModalPedidoAcoes({
       <View style={styles.modalFundo}>
         <View style={styles.modalContainer}>
           <Text style={styles.modalTitulo}>
-            {pedido ? `Pedido de ${pedido.nomecliente}` : 'Pedido'}
+            Pedido de {pedido.nomecliente}
           </Text>
 
           <View style={styles.modalBotoes}>
@@ -39,22 +43,20 @@ export default function ModalPedidoAcoes({
               <Text>Sair</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.botao, { backgroundColor: '#28a745' }]}
-              onPress={() => {
-                if (pedido) onEnviar(pedido);
-              }}
-            >
-              <Text style={{ color: '#fff' }}>Enviar</Text>
-            </TouchableOpacity>
+            {podeEnviar && (
+              <TouchableOpacity
+                style={[styles.botao, { backgroundColor: '#28a745' }]}
+                onPress={() => onEnviar(pedido)}
+              >
+                <Text style={{ color: '#fff' }}>Enviar</Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={[styles.botao, { backgroundColor: '#007bff' }]}
-              onPress={() => {
-                if (pedido) onGerarPDF(pedido);
-              }}
+              onPress={() => onGerarPDF(pedido)}
             >
-              <Text style={{ color: '#fff' }}>Enviar PDF</Text>
+              <Text style={{ color: '#fff' }}>Gerar PDF</Text>
             </TouchableOpacity>
           </View>
         </View>
