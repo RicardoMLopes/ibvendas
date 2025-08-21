@@ -231,9 +231,12 @@ const TelaPedido: React.FC = () => {
       const { sincronizarPedidosSelecionados } = await useSyncEmpresa();
       const sucesso = await sincronizarPedidosSelecionados([cd_pedido]);
       if (sucesso) {
-        Alert.alert('Sucesso', 'Pedido enviado com sucesso.');
+       /// Alert.alert('Sucesso', 'Pedido enviado com sucesso.');
         setPedidoEnviado(true);
         setModalConfirmacaoVisivel(false);
+        // 🔹 Redireciona para a Home após enviar
+        const CNPJ = await recuperarValor("@cnpj");
+        navigation.reset({index: 0, routes: [{ name: 'home', params: { cnpj: CNPJ } }],});
       } else {
         Alert.alert('Erro', 'Falha ao enviar o pedido. Tente novamente.');
       }
@@ -333,7 +336,9 @@ const TelaPedido: React.FC = () => {
         data={itens}
         keyExtractor={(item, index) => `${item.produto}-${index}`}
         renderItem={({ item }) => (
-          <TouchableOpacity onPress={() => abrirModalEditar(item)} style={styles.itemPedido}>
+          <TouchableOpacity 
+            onPress={() => { if (!pedidoEnviado) {abrirModalEditar(item); } else { Alert.alert("Aviso", "Pedido já foi enviado e não pode mais ser alterado.");}}}
+            style={styles.itemPedido}>
             <Text style={{ fontWeight: 'bold' }}>{item.descricaoproduto}</Text>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 }}>
               <Text>Quantidade: {formatQuantidade(item.quantidade, item.casasdecimais)}</Text>

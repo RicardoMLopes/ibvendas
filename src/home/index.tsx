@@ -8,6 +8,11 @@ import { adicionarValor, recuperarValor } from '../scripts/adicionarourecuperar'
 import SyncLogPanel from '../logs/logssincronizacao';
 import AnimatedMessage from './animatemensage';
 import { useNavigation } from '@react-navigation/native';
+import {getCatalogoPDF} from '../produto/catalogo';
+import * as Sharing from 'expo-sharing';
+
+
+
 
 type RootStackParamList = {
   home: { cnpj: string };
@@ -58,6 +63,7 @@ const LoadingOverlay: React.FC<{ message: string }> = ({ message }) => {
   const [fadeAnim] = useState(new Animated.Value(0));
 
   useEffect(() => {
+
     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
   }, []);
 
@@ -83,13 +89,16 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
   const [totaisSincronizacao, setTotaisSincronizacao] = useState<Record<string, any>>({});
   const navigations = useNavigation<any>();
 
-  const { cnpj } = route.params;
+  const cnpj = route.params?.cnpj || ''; // Use o CNPJ passado pela rota ou um padrão
+
+
 
   useEffect(() => {
     async function carregarNomeEmpresa() {
       try {
         const { buscarVendedorDoUsuario } = await useSyncEmpresa();
         const usuarioId = await recuperarValor('@IDUSER');
+        
         const resultado = await buscarVendedorDoUsuario(Number(usuarioId));
         adicionarValor('@CodigoVendedor', resultado!.codigo!.toString());
         adicionarValor('@Vendedor', resultado!.nome!.toString());
@@ -196,7 +205,7 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
               style={styles.option}
               onPress={() => navigation.navigate('listarcliente')}
             >
-              <Image source={require('../static/img/logo/novo_pedido.png')} style={styles.icon} />
+              <Image source={require('./../../assets/novo_pedido.png')} style={styles.icon} />
               <Text style={styles.optionText}>Novo Pedido</Text>
             </TouchableOpacity>
 
@@ -204,9 +213,10 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
               style={styles.option}
               onPress={() => navigation.navigate('GerenciarPedidos')}
             >
-              <Image source={require('../static/img/logo/gerar_pedidos.png')} style={styles.icon} />
+              <Image source={require('./../../assets/gerar_pedidos.png')} style={styles.icon} />
               <Text style={styles.optionText}>Ger. Pedidos</Text>
             </TouchableOpacity>
+            
 
             <TouchableOpacity
               style={styles.option}
@@ -222,7 +232,7 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
                 );
               }}
             >
-              <Image source={require('../static/img/logo/Sincronizar_2.png')} style={styles.icon} />
+              <Image source={require('./../../assets/Sincronizar_2.png')} style={styles.icon} />
               <Text style={styles.optionText}>Sincronizar</Text>
             </TouchableOpacity>
 
@@ -232,9 +242,21 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
                 navigation.navigate('listaritens', { formaId: 1, permitirSelecao: false, exibirModal: false })
               }
             >
-              <Image source={require('../static/img/logo/Produtos.png')} style={styles.icon} />
+              <Image source={require('./../../assets/Produtos.png')} style={styles.icon} />
               <Text style={styles.optionText}>Produtos</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.option}
+              onPress={async () => {
+                await getCatalogoPDF(); // função já trata compartilhamento
+              }}
+            >
+              <Image source={require('./../../assets/catalogo.png')} style={styles.icon} />
+              <Text style={styles.optionText}>Abrir Catálogo</Text>
+            </TouchableOpacity>
+
+
+            
           </View>
 
           {showLog && (syncLogs.length > 0 || Object.keys(totaisSincronizacao).length > 0) && (

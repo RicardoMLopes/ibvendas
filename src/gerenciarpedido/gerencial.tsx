@@ -178,7 +178,7 @@ async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
     const sucesso = await sincronizarPedidosSelecionados([pedido.numerodocumento]);
 
     if (sucesso) {
-      Alert.alert('Sucesso', `Pedido ${pedido.numerodocumento} enviado com sucesso!`);
+    //  Alert.alert('Sucesso', `Pedido ${pedido.numerodocumento} enviado com sucesso!`);
       pesquisar(); // Atualiza lista
       fecharModal(); // fecha apenas no sucesso
     } else {

@@ -66,3 +66,17 @@ export const baixarImagem = async (url: string, nomeArquivo: string): Promise<st
     return null;
   }
 };
+
+export async function getArquivoLocalMtime(nomeArquivo: string): Promise<number | null> {
+  const value = await AsyncStorage.getItem(`arquivo:${nomeArquivo}`);
+  if (!value) return null;
+  return Number(value); // converte string para number
+};
+
+export async function setArquivoLocalMtime(nomeArquivo: string, mtime: number): Promise<void> {
+  try {
+    await AsyncStorage.setItem(`arquivo:${nomeArquivo}`, mtime.toString());
+  } catch (e) {
+    console.error(`Erro ao salvar mtime do arquivo ${nomeArquivo}:`, e);
+  }
+}

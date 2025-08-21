@@ -178,3 +178,37 @@ export async function carregarLogoBase64(): Promise<string | null> {
     return null;
   }
 }
+
+export function formatarCnpjCpf(valor: string | null): string {
+  if (!valor) return "";
+
+  // Remove tudo que não for número
+  const apenasNumeros = valor.replace(/\D/g, "");
+
+  if (apenasNumeros.length === 11) {
+    // CPF -> 000.000.000-00
+    return apenasNumeros.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, "$1.$2.$3-$4");
+  } else if (apenasNumeros.length === 14) {
+    // CNPJ -> 00.000.000/0000-00
+    return apenasNumeros.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, "$1.$2.$3/$4-$5");
+  }
+
+  // Se não tiver tamanho esperado, retorna só os números
+  return apenasNumeros;
+}
+
+
+
+export async function obterInfoArquivoLocal(nomeArquivo: string): Promise<{ mtime: number } | null> {
+  try {
+    const caminhoLocal = FileSystem.documentDirectory + nomeArquivo;
+    const info = await FileSystem.getInfoAsync(caminhoLocal);
+    if (info.exists && info.modificationTime) {
+      return { mtime: info.modificationTime };
+    }
+    return null;
+  } catch (e) {
+    console.error('Erro ao obter info do arquivo local:', e);
+    return null;
+  }
+}

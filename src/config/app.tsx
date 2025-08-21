@@ -6,8 +6,8 @@ import { obterTokenCNPJ } from '../config/tokenmanager'; // Importando a funçã
 
 
 const api = axios.create({
-  baseURL: 'https://servidor-64qt.onrender.com/',
-// baseURL: 'http://192.168.100.40:8000/', // Substitua pela sua base URL
+//  baseURL: 'https://servidor-64qt.onrender.com/',
+ baseURL: 'http://192.168.100.40:8000/', // Substitua pela sua base URL
 //  baseURL: 'http://192.168.0.182:8000/', // Substitua pela sua base URL
   timeout: 30000,
   headers: {

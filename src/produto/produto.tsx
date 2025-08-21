@@ -463,61 +463,71 @@ const compartilharImagem = async () => {
       )}
 
       <Modal visible={filtroVisivel} transparent animationType="slide">
-        <View style={styles.modalFiltro}>
-          <View style={styles.modalContent}>
-            <Text style={styles.tituloModal}>🔍 Filtros Avançados</Text>
+      <View style={styles.modalFiltro}>
+        <View style={styles.modalContent}>
+          <Text style={styles.tituloModal}>🔍 Filtros Avançados</Text>
 
-            <TextInput
-              style={styles.inputModal}
-              placeholder="Agrupamento"
-              value={agrupamentoFiltro}
-              onChangeText={setAgrupamentoFiltro}
-            />
+          <Text style={styles.labelModal}>Agrupamento</Text>
+          <TextInput
+            style={styles.inputModal}
+            placeholder="Agrupamento"
+            placeholderTextColor={'#999'}
+            value={agrupamentoFiltro}
+            onChangeText={setAgrupamentoFiltro}
+          />
 
+          <Text style={styles.labelModal}>Código de Barra</Text>
+          <TextInput
+            style={styles.inputModal}
+            placeholder="Código de Barra"
+            placeholderTextColor={'#999'}
+            value={codigoBarraFiltro}
+            onChangeText={setCodigoBarraFiltro}
+            keyboardType="numeric"
+          />
+
+          <Text style={styles.labelModal}>Unidade de Medida</Text>
+          <TextInput
+            style={styles.inputModal}
+            placeholder="Unidade de Medida"
+            placeholderTextColor={'#999'}
+            value={unidadeFiltro}
+            onChangeText={setUnidadeFiltro}
+          />
+
+          <Text style={styles.labelModal}>Faixa de Preço</Text>
+          <View style={styles.linhaPreco}>
             <TextInput
-              style={styles.inputModal}
-              placeholder="Código de Barra"
-              value={codigoBarraFiltro}
-              onChangeText={setCodigoBarraFiltro}
+              style={[styles.inputModal, { flex: 1, marginRight: 5 }]}
+              placeholder="0,00"
+              placeholderTextColor={'#999'}
+              value={precoMin}
+              onChangeText={setPrecoMin}
               keyboardType="numeric"
             />
-
             <TextInput
-              style={styles.inputModal}
-              placeholder="Unidade de Medida"
-              value={unidadeFiltro}
-              onChangeText={setUnidadeFiltro}
+              style={[styles.inputModal, { flex: 1, marginLeft: 5 }]}
+              placeholder="999.999,99"
+              placeholderTextColor={'#999'}
+              value={precoMax}
+              onChangeText={setPrecoMax}
+              keyboardType="numeric"
             />
+          </View>
 
-            <View style={styles.linhaPreco}>
-              <TextInput
-                style={[styles.inputModal, { flex: 1, marginRight: 5 }]}
-                placeholder="Preço Mínimo"
-                value={precoMin}
-                onChangeText={setPrecoMin}
-                keyboardType="numeric"
-              />
-              <TextInput
-                style={[styles.inputModal, { flex: 1, marginLeft: 5 }]}
-                placeholder="Preço Máximo"
-                value={precoMax}
-                onChangeText={setPrecoMax}
-                keyboardType="numeric"
-              />
-            </View>
+          <View style={styles.botoesModal}>
+            <TouchableOpacity style={styles.botaoModal} onPress={() => setFiltroVisivel(false)}>
+              <Text style={styles.textoBotaoModal}>Aplicar Filtros</Text>
+            </TouchableOpacity>
 
-            <View style={styles.botoesModal}>
-              <TouchableOpacity style={styles.botaoModal} onPress={() => setFiltroVisivel(false)}>
-                <Text style={styles.textoBotaoModal}>Aplicar Filtros</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity style={[styles.botaoModal, { backgroundColor: '#ccc' }]} onPress={() => setFiltroVisivel(false)}>
-                <Text style={[styles.textoBotaoModal, { color: '#333' }]}>Cancelar</Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity style={[styles.botaoModal, { backgroundColor: '#ccc' }]} onPress={() => setFiltroVisivel(false)}>
+              <Text style={[styles.textoBotaoModal, { color: '#333' }]}>Cancelar</Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
+      </View>
+    </Modal>
+
     </View>
   );
 }

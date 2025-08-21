@@ -155,6 +155,14 @@ botaoFiltro: {
   backgroundColor: '#e0e0e0',
   borderRadius: 8,
 },
+labelModal: {
+  fontSize: 14,
+  fontWeight: 'bold',
+  marginBottom: 4,
+  marginTop: 12,
+  color: '#333',
+},
+
 
 
 

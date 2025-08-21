@@ -76,7 +76,8 @@ export async function initializedatabase(database: SQLiteDatabase) {
       versaoRotaCondicaoPagamento INTEGER DEFAULT 0,
       versaoRotaCliente INTEGER DEFAULT 0,
       versaoProduto INTEGER DEFAULT 0,
-      versaoParametro INTEGER DEFAULT 0
+      versaoParametro INTEGER DEFAULT 0,
+      datacatalogo TEXT NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS cadrotacliente (

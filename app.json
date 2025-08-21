@@ -4,14 +4,14 @@
     "slug": "ibvendas",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./src/static/img/logo/empresa.jpg",
+    "icon": "./assets/empresa.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "assetBundlePatterns": [
       "assets/**/*"
     ],
     "splash": {
-      "image": "./src/static/img/logo/empresa.jpg",
+      "image": "./assets/empresa.jpg",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -54,7 +54,7 @@
         "android.permission.MANAGE_MEDIA"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./src/static/img/logo/empresa.jpg",
+        "foregroundImage": "./assets/empresa.jpg",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -70,7 +70,7 @@
       ]
     },
     "web": {
-      "favicon": "./src/static/img/logo/empresa.jpg"
+      "favicon": "./assets/empresa.jpg"
     },
     "plugins": [
       "react-native-edge-to-edge"

@@ -2,10 +2,10 @@ import { useSQLiteContext } from "expo-sqlite";
 import api from '../config/app';
 import { setParametrosSistema } from '../config/parametros';
 import {ParametrosSistema} from '../config/configs'
-import { criarPastaImagens } from '../scripts/criarpasta';
+import { criarPastaImagens, getArquivoLocalMtime, setArquivoLocalMtime } from '../scripts/criarpasta';
 import { baixarImagem } from '../scripts/criarpasta';
 import DatabaseManager from '../database/databasemanager';
-import { formatarDataRegistro, sanitizarNumero, tentarRequisicao } from "../scripts/funcoes";
+import { formatarDataRegistro, obterInfoArquivoLocal, sanitizarNumero, tentarRequisicao } from "../scripts/funcoes";
 import { id } from "date-fns/locale";
 
 type ImagemServidor = string;
@@ -392,30 +392,37 @@ async function sincronizarProdutos(): Promise<{
 //================================================================================================
 // ***********************Inicio da função de sincronização das imagens **************************
 //------------------------------------------------------------------------------------------------
-async function sincronizarImagens(): Promise<number> {
-  try {
-    let totalimagem = 0;
-    const response = await api.get<{ imagens: string[] }>('lista/imagem');
-    const urls = response.data.imagens;
 
-    for (const url of urls) {
-      totalimagem++;
-      const nomeArquivo = url.split('/').pop();
-      if (nomeArquivo) {
-        await baixarImagem(url, nomeArquivo);
+async function sincronizarImagens(): Promise<number> {
+  let totalbaixadas = 0;
+
+  try {
+    const response = await api.get<{ imagens: { url: string; mtime: number }[] }>('lista/imagem');
+    const arquivos = response.data.imagens;
+
+    for (const arquivo of arquivos) {
+      const nomeArquivo = arquivo.url.split('/').pop();
+      if (!nomeArquivo) continue;
+
+      // Pega mtime salvo no AsyncStorage
+      const mtimeLocal = await getArquivoLocalMtime(nomeArquivo);
+
+      // Baixa somente se não existir ou se o mtime do servidor for maior
+      if (!mtimeLocal || mtimeLocal < arquivo.mtime) {
+        await baixarImagem(arquivo.url, nomeArquivo);
+        await setArquivoLocalMtime(nomeArquivo, arquivo.mtime); // atualiza o mtime local
+        totalbaixadas++;
       }
     }
-    console.log('total de imagens:', totalimagem);
-    console.log(`✅ ${totalimagem} imagens baixadas com sucesso.`);
 
-    return totalimagem; // Retorna o total sincronizado
+    console.log(`✅ Total de imagens baixadas ou atualizadas: ${totalbaixadas}`);
+    return totalbaixadas;
+
   } catch (error) {
-    console.error('❌ Erro ao buscar imagens:', error);
-    throw error;
+    console.error('❌ Erro ao sincronizar imagens:', error);
+    return 0;
   }
 }
-
-
 
 // ***********************Inicio da função de sincronização das imagens **************************
 //------------------------------------------------------------------------------------------------
@@ -1736,23 +1743,28 @@ const atualizarObservacao = async (
   codigocliente: string,
   observacao: string
 ): Promise<boolean> => {
+  console.log("Atualizando observação:", observacao);
+  console.log("Empresa:", empresa);
+  console.log("Número do documento:", numerodocumento);
+  console.log("Código do cliente:", codigocliente);
+
   try {
-    if(observacao.trim().length === 0) {
-    await database.runAsync(
-      `UPDATE movnota
-       SET observacao = ?, situacaoregistro = "A"
-       WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND status = "P"`,
-      [observacao, empresa, numerodocumento, codigocliente]
-    );
-      return true;
+    // Atualiza somente se houver texto na observação
+    if (observacao.trim().length > 0) {
+      await database.runAsync(
+        `UPDATE movnota
+         SET observacao = ?, situacaoregistro = "A"
+         WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND status = "P"`,
+        [observacao, empresa, numerodocumento, codigocliente]
+      );
     }
-    
     return true;
   } catch (error) {
     console.error('Erro ao atualizar observação:', error);
     return false;
   }
 };
+
 //===============================================================================================
 //                                CONSULTA GERENCIAL DE PEDIDO
 //-----------------------------------------------------------------------------------------------
