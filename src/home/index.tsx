@@ -17,7 +17,7 @@ import * as Sharing from 'expo-sharing';
 type RootStackParamList = {
   home: { cnpj: string };
   listaritens: { formaId: number; permitirSelecao?: boolean; exibirModal?: boolean };
-  listarcliente: undefined;
+  listarcliente: { selecionarHabilitado: boolean };
   SyncOptions: undefined;
   GerenciarPedidos: undefined;
 };
@@ -203,7 +203,7 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
           <View style={styles.optionsContainer}>
             <TouchableOpacity
               style={styles.option}
-              onPress={() => navigation.navigate('listarcliente')}
+              onPress={() => navigation.navigate('listarcliente', {selecionarHabilitado: true})}
             >
               <Image source={require('./../../assets/novo_pedido.png')} style={styles.icon} />
               <Text style={styles.optionText}>Novo Pedido</Text>
@@ -253,6 +253,14 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
             >
               <Image source={require('./../../assets/catalogo.png')} style={styles.icon} />
               <Text style={styles.optionText}>Abrir Catálogo</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.option}
+              onPress={() => navigation.navigate('listarcliente', {selecionarHabilitado: false})}
+            >
+              <Image source={require('./../../assets/clientes.png')} style={styles.icon} />
+              <Text style={styles.optionText}>Clientes</Text>
             </TouchableOpacity>
 
 

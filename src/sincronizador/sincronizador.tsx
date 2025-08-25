@@ -233,7 +233,7 @@ async function handleSync(type: string) {
         );
         break;
 
-      case 'imagens':
+     case 'imagens':
         confirmAndRun(
           'Sincronizar imagens?',
           'Deseja iniciar a sincronização das imagens?',
@@ -245,9 +245,18 @@ async function handleSync(type: string) {
 
             adicionarLog('▶️ Iniciando sincronização das imagens...');
             try {
-              const totalImagens = await sincronizarImagens();
-              adicionarLog(`✅ Imagens sincronizadas: ${totalImagens}`);
-              setTotaisSincronizacao(prev => ({ ...prev, imagens: { total: totalImagens } }));
+              const { novas, atualizadas, total } = await sincronizarImagens(); // agora retorna objeto
+              adicionarLog(
+                            `\n📊 Resultado da sincronização:\n` +
+                            `🆕 Novas: ${novas}\n` +
+                            `🔄 Atualizadas: ${atualizadas}\n` +
+                            `📦 Total: ${total}`
+                          );
+
+              setTotaisSincronizacao(prev => ({
+                ...prev,
+                imagens: { novas, atualizadas, total }
+              }));
             } catch (error) {
               adicionarLog('❌ Falha na sincronização das imagens.');
             } finally {
@@ -280,6 +289,16 @@ async function handleSync(type: string) {
     imagens: '#001122',
   };
 
+  const buttonLabels: Record<string, string> = {
+  pedidos: 'Sincronizar Pedidos',
+  produtos: 'Sincronizar Produtos',
+  clientes: 'Sincronizar Clientes',
+  parametros: 'Sincronizar Parâmetros',
+  condicoesPagamento: 'Sincronizar Condições de pagamento',
+  vendedores: 'Sincronizar Vendedores',
+  imagens: 'Sincronizar Imagens',
+};
+
   return (
     <View style={{ flex: 1, padding: 20, backgroundColor: '#fff' }}>
       <Text style={{ fontSize: 22, fontWeight: 'bold', marginBottom: 20 }}>
@@ -311,7 +330,7 @@ async function handleSync(type: string) {
                   textAlign: 'center',
                 }}
               >
-                Sincronizar {type.replace(/([A-Z])/g, ' $1')}
+                {buttonLabels[type]}
               </Text>
             </TouchableOpacity>
           ))}

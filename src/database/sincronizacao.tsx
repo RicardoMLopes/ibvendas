@@ -5,7 +5,7 @@ import {ParametrosSistema} from '../config/configs'
 import { criarPastaImagens, getArquivoLocalMtime, setArquivoLocalMtime } from '../scripts/criarpasta';
 import { baixarImagem } from '../scripts/criarpasta';
 import DatabaseManager from '../database/databasemanager';
-import { formatarDataRegistro, obterInfoArquivoLocal, sanitizarNumero, tentarRequisicao } from "../scripts/funcoes";
+import { arredondar, formatarDataRegistro, obterInfoArquivoLocal, sanitizarNumero, tentarRequisicao } from "../scripts/funcoes";
 import { id } from "date-fns/locale";
 
 type ImagemServidor = string;
@@ -393,8 +393,9 @@ async function sincronizarProdutos(): Promise<{
 // ***********************Inicio da função de sincronização das imagens **************************
 //------------------------------------------------------------------------------------------------
 
-async function sincronizarImagens(): Promise<number> {
-  let totalbaixadas = 0;
+async function sincronizarImagens(): Promise<{ novas: number; atualizadas: number; total: number }> {
+  let novas = 0;
+  let atualizadas = 0;
 
   try {
     const response = await api.get<{ imagens: { url: string; mtime: number }[] }>('lista/imagem');
@@ -404,23 +405,30 @@ async function sincronizarImagens(): Promise<number> {
       const nomeArquivo = arquivo.url.split('/').pop();
       if (!nomeArquivo) continue;
 
-      // Pega mtime salvo no AsyncStorage
       const mtimeLocal = await getArquivoLocalMtime(nomeArquivo);
 
-      // Baixa somente se não existir ou se o mtime do servidor for maior
-      if (!mtimeLocal || mtimeLocal < arquivo.mtime) {
+      if (!mtimeLocal) {
+        // Imagem nova
         await baixarImagem(arquivo.url, nomeArquivo);
-        await setArquivoLocalMtime(nomeArquivo, arquivo.mtime); // atualiza o mtime local
-        totalbaixadas++;
+        novas++;
+      } else if (mtimeLocal < arquivo.mtime) {
+        // Imagem existente, mas desatualizada
+        await baixarImagem(arquivo.url, nomeArquivo);
+        atualizadas++;
+      }
+
+      if (!mtimeLocal || mtimeLocal < arquivo.mtime) {
+        await setArquivoLocalMtime(nomeArquivo, arquivo.mtime);
       }
     }
 
-    console.log(`✅ Total de imagens baixadas ou atualizadas: ${totalbaixadas}`);
-    return totalbaixadas;
+    const total = novas + atualizadas;
+    console.log(`🆕 Novas: ${novas}, 🔄 Atualizadas: ${atualizadas}, 📦 Total: ${total}`);
+    return { novas, atualizadas, total };
 
   } catch (error) {
     console.error('❌ Erro ao sincronizar imagens:', error);
-    return 0;
+    return { novas: 0, atualizadas: 0, total: 0 };
   }
 }
 
@@ -1469,7 +1477,7 @@ async function carregarPedidoCompleto(empresa: number, numerodocumento: number) 
     INNER JOIN cadcondicaopagamento P ON
       A.codigocondPagamento = P.codigo AND
       A.empresa = P.empresa
-    WHERE A.empresa = ? AND A.numerodocumento = ? AND B.situacaoregistro <> "E"
+    WHERE A.empresa = ? AND A.numerodocumento = ? AND B.situacaoregistro <> "E" 
     GROUP BY A.numerodocumento, A.codigocliente, B.codigoproduto`,
     [empresa, numerodocumento]
   ) as any[];
@@ -1654,6 +1662,54 @@ const excluirItemPedido = async (
     return false;
   }
 };
+
+// =======================================================================================================
+//         DELETAR O PEDIDO DE VENDA
+// -------------------------------------------------------------------------------------------------------
+const deletarPedidoPorNumero = async (
+  empresa: number,
+  numerodocumento: number,
+  codigocliente: string
+): Promise<boolean> => {
+  try {
+    // 1. Verifica se o pedido existe e está PENDENTE
+    const pedido = await database.getFirstAsync<{ status: string, situacaoregistro: string }>(
+      `SELECT status, situacaoregistro FROM movnota
+       WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND situacaoregistro <> 'E' AND status = 'P'`,
+      [empresa, numerodocumento, codigocliente]
+    );
+
+    if (!pedido) {
+      console.warn("Pedido não encontrado.");
+      return false;
+    }
+
+    if (pedido.status !== 'P' || pedido.situacaoregistro === 'E') {
+      console.warn("Pedido não pode ser deletado (não é PENDENTE ou já excluído).");
+      return false;
+    }
+
+    // 2. Marca todos os itens como excluídos
+    await database.runAsync(
+      `UPDATE movnotaitem SET situacaoregistro = 'E'
+       WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? `,
+      [empresa, numerodocumento, codigocliente]
+    );
+
+    // 3. Marca o cabeçalho do pedido como excluído (mantendo valorTotal)
+    await database.runAsync(
+      `UPDATE movnota SET situacaoregistro = 'E'
+       WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND status = 'P' `,
+      [empresa, numerodocumento, codigocliente]
+    );
+
+    return true;
+  } catch (error: any) {
+    console.error("Erro ao deletar pedido:", error.message || error);
+    return false;
+  }
+};
+
 
 
 
@@ -2246,6 +2302,127 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
   }
 }
 
+//===============================================================================================
+//                  DUPLICAR PEDIDO DE VENDA
+//-----------------------------------------------------------------------------------------------
+
+async function DuplicarPedido(
+  empresa: number,               // number primitivo
+  numerodocumentoOrigem: number, // number primitivo
+  codigocliente: string         // string primitivo
+): Promise<number> {
+  try {
+    await database.runAsync("BEGIN TRANSACTION");
+
+    // 1️⃣ Recupera pedido original
+    const pedidoOrigem = await database.getFirstAsync<any>(
+      `SELECT * FROM movnota WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND situacaoregistro <> 'E' AND status = 'R'`,
+      [empresa, numerodocumentoOrigem, codigocliente]
+    );
+
+    if (!pedidoOrigem) throw new Error("Pedido original não encontrado.");
+
+    // 2️⃣ Gera novo numerodocumento
+    const novoNumerodocumento = await gerarnumerodocumento(empresa, codigocliente);
+
+    // 3️⃣ Insere novo pedido
+    await database.runAsync(
+      `INSERT INTO movnota (
+        empresa, numerodocumento, codigocondPagamento, codigovendedor, codigocliente, nomecliente,
+        valorDesconto, valorDespesas, valorFrete, valorTotal, pesoTotal,
+        observacao, status, dataLancamento, dataRegistro
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        empresa,
+        novoNumerodocumento,
+        pedidoOrigem.codigocondPagamento,
+        pedidoOrigem.codigovendedor,
+        pedidoOrigem.codigocliente,
+        pedidoOrigem.nomecliente ?? '',
+        pedidoOrigem.valorDesconto ?? 0,
+        pedidoOrigem.valorDespesas ?? 0,
+        pedidoOrigem.valorFrete ?? 0,
+        0, // valorTotal será recalculado
+        pedidoOrigem.pesoTotal ?? 0,
+        pedidoOrigem.observacao ?? '',
+        'P',
+        pedidoOrigem.dataLancamento,
+        pedidoOrigem.dataRegistro
+      ]
+    );
+
+    // 4️⃣ Recupera itens do pedido original
+    const itensOrigem: any[] = await database.getAllAsync(
+      `SELECT * FROM movnotaitem WHERE empresa = ? AND numerodocumento = ?`,
+      [empresa, numerodocumentoOrigem]
+    );
+
+    // 5️⃣ Insere itens no novo pedido
+    for (const item of itensOrigem) {
+      const valorTotalItem =
+            arredondar(
+              item.quantidade * arredondar(item.valorunitariovenda ?? 0, 2)
+              + arredondar(item.valoracrescimo ?? 0, 2)
+              - arredondar(item.valorDesconto ?? 0, 2)
+            );
+
+
+      await database.runAsync(
+        `INSERT INTO movnotaitem (
+          empresa, numerodocumento, codigovendedor, codigoproduto, descricaoproduto,
+          valorUnitario, valorunitariovenda, valorDesconto, valoracrescimo, valorTotal, quantidade,
+          dataRegistro, codigocliente
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          empresa,
+          novoNumerodocumento,
+          item.codigovendedor,
+          item.codigoproduto,
+          item.descricaoproduto ?? '',
+          item.valorUnitario,
+          item.valorunitariovenda,
+          item.valorDesconto ?? 0,
+          item.valoracrescimo ?? 0,
+          valorTotalItem,
+          item.quantidade,
+          item.dataRegistro,
+          item.codigocliente
+        ]
+      );
+    }
+
+    // 6️⃣ Recalcula valorTotal do pedido duplicado
+    const resultadoTotal = await database.getFirstAsync<{ total: number }>(
+      `SELECT IFNULL(SUM(
+         ROUND(quantidade * ROUND(valorunitariovenda, 2), 2)
+         + ROUND(valoracrescimo, 2)
+         - ROUND(valorDesconto, 2)
+       ), 0) AS total
+       FROM movnotaitem
+       WHERE empresa = ? AND numerodocumento = ?`,
+      [empresa, novoNumerodocumento]
+    );
+
+    const totalItens = resultadoTotal?.total ?? 0;
+    const valorTotalFinal =
+      Math.round((totalItens - (pedidoOrigem.valorDesconto ?? 0) + (pedidoOrigem.valorDespesas ?? 0)) * 100) / 100;
+
+    await database.runAsync(
+      `UPDATE movnota SET valorTotal = ? WHERE empresa = ? AND numerodocumento = ?`,
+      [valorTotalFinal, empresa, novoNumerodocumento]
+    );
+
+    await database.runAsync("COMMIT");
+    console.log(`✅ Pedido duplicado com sucesso! Novo número: ${novoNumerodocumento}`);
+    return novoNumerodocumento;
+
+  } catch (error: any) {
+    await database.runAsync("ROLLBACK");
+    console.error("❌ Erro ao duplicar pedido:", error.message || error);
+    throw error;
+  }
+}
+
 
 
 
@@ -2258,7 +2435,8 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
            carregarPedidoCompleto, gerarnumerodocumento, contarItensCarrinho, carregarParametros,
            buscarFormaPagamentoDoPedido, excluirItemPedido, atualizarPedido, atualizarObservacao,
            ConsultaPedido ,validarUsuarioLocal,  GravarPedidos, buscarVendedorDoUsuario, 
-           sincronizarPedidosSelecionados, sincronizarTodosPedidos,
+           sincronizarPedidosSelecionados, sincronizarTodosPedidos, deletarPedidoPorNumero,
+           DuplicarPedido,
           };
 }
 

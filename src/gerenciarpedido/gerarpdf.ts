@@ -3,9 +3,6 @@ import * as Sharing from 'expo-sharing';
 import { format } from 'date-fns';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
-import { carregarLogoBase64 } from '../scripts/funcoes';
-
-
 
 interface ItemPedido {
   codigobarra: string;
@@ -30,6 +27,31 @@ interface Pedido {
   valortotal: number;
 }
 
+// Função para carregar logo como Base64
+export async function carregarLogoBase64(): Promise<string | null> {
+  try {
+    // Caminho fixo da logo no projeto
+    const asset = Asset.fromModule(require('../../assets/empresa.png'));
+
+    // Garante que o arquivo seja baixado para o dispositivo
+    await asset.downloadAsync();
+
+    if (!asset.localUri) {
+      console.warn('Logo não encontrada no dispositivo.');
+      return null;
+    }
+
+    // Lê o arquivo e converte para Base64
+    const base64 = await FileSystem.readAsStringAsync(asset.localUri, {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    return base64;
+  } catch (error) {
+    console.error('Erro ao carregar logo:', error);
+    return null;
+  }
+}
 
 export async function gerarPdfPedido(pedido: Pedido) {
   const dataEmissao = format(new Date(), 'dd/MM/yyyy HH:mm');
@@ -44,7 +66,7 @@ export async function gerarPdfPedido(pedido: Pedido) {
 
   const logoBase64 = await carregarLogoBase64();
   const logoImg = logoBase64
-    ? `<img src="data:image/jpeg;base64,${logoBase64}" class="logo" />`
+    ? `<img src="data:image/png;base64,${logoBase64}" class="logo" />`
     : `<img src="https://via.placeholder.com/80" class="logo" />`;
 
   const html = `

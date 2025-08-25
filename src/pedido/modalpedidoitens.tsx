@@ -68,7 +68,7 @@ const ModalEditarItem: React.FC<ModalEditarItemProps> = ({
     try {
       // chama o callback de salvar
       await onSalvar(valorNum);
-      Alert.alert('Sucesso', 'Item atualizado com sucesso.');
+     // Alert.alert('Sucesso', 'Item atualizado com sucesso.');
       onFechar();
     } catch (error) {
       console.error(error);

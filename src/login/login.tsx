@@ -143,82 +143,74 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
   }
 
   const realizarLogin = async () => {
-    // Reset das mensagens
-    setErroUsuario('');
-    setErroSenha('');
-    setLoginError('');  
-     
+  // Reset das mensagens
+  setErroUsuario('');
+  setErroSenha('');
+  setLoginError('');
 
-    if (!username.trim()) {
-      setErroUsuario('Preencha o usuário!');
-      Vibration.vibrate(500);
-      setTimeout(() => setErroUsuario(''), 3000);
-      return; // não continua
-    }
+  if (!username.trim()) {
+    setErroUsuario('Preencha o usuário!');
+    Vibration.vibrate(500);
+    setTimeout(() => setErroUsuario(''), 3000);
+    return;
+  }
 
-    if (!password.trim()) {
-      setErroSenha('Preencha a senha!');
-      Vibration.vibrate(500);
-      setTimeout(() => setErroSenha(''), 3000);
-      return; // não continua
-    }
+  if (!password.trim()) {
+    setErroSenha('Preencha a senha!');
+    Vibration.vibrate(500);
+    setTimeout(() => setErroSenha(''), 3000);
+    return;
+  }
 
-    if (!usuarioEncontrado) {
-      setLoginError('Usuário não identificado.');
+  if (!usuarioEncontrado) {
+    setLoginError('Usuário não identificado.');
+    Vibration.vibrate(500);
+    setTimeout(() => setLoginError(''), 3000);
+    return;
+  }
+
+  setLoading(true);
+  try {
+    const { validarUsuarioLocal, sincronizarUsuarios, sincronizarVendedores } = await useSyncEmpresa();
+
+    // 🔠 Converte usuário e senha para maiúsculas apenas na validação
+    const usuarioUpper = username.trim().toUpperCase();
+    const senhaUpper = password.trim().toUpperCase();
+
+    const resultado = await validarUsuarioLocal(codigoempresa, usuarioUpper);
+
+    const senhaParaValidar = (resultado.novaSenha && resultado.novaSenha.trim() !== '')
+      ? resultado.novaSenha
+      : (resultado.senhaantiga ?? '');
+
+    const senhaCorreta = await validarSenhaExpo(senhaUpper, senhaParaValidar);
+
+    if (!senhaCorreta) {
+      setLoginError('Usuário ou senha inválidos.');
       Vibration.vibrate(500);
       setTimeout(() => setLoginError(''), 3000);
+      await sincronizarUsuarios();
+      await sincronizarVendedores();
       return;
     }
 
-    setLoading(true);
-    try {
-      const { validarUsuarioLocal, sincronizarUsuarios, sincronizarVendedores } = await useSyncEmpresa();
-    //  console.log('🔍 Exibe a senha normal:', password);
-      
-   //   console.log('🔍 Validando usuário local:', username, 'para a empresa:', codigoempresa);
-      const resultado = await validarUsuarioLocal(codigoempresa, username.toString());
+    const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
+    await adicionarValor('@IDUSER', resultado.id?.toString() || '0');
+    await adicionarValor('@CNPJ', cnpjLimpo);
+    await adicionarValor('@empresa', codigoempresa.toString());
+    await adicionarValor('@nomeEmpresa', empresa);
 
-    //  console.log('🔍 Resultado da senha:', resultado)  ;
-      console.log('🔍 Senha digitada:', password);
-
-
-      // Determina a senha a ser validada
-      const senhaParaValidar = (resultado.novaSenha && resultado.novaSenha.trim() !== '')
-        ? resultado.novaSenha
-        : (resultado.senhaantiga ?? ''); // garante sempre uma string
-
-      // Valida a senha usando a função de hash / comparação
-       console.log('🔍 Senha para validar:', senhaParaValidar);
-      const senhaCorreta = await validarSenhaExpo(password, senhaParaValidar);
-
-      if (!senhaCorreta) {
-        setLoginError('Usuário ou senha inválidos.');
-        Vibration.vibrate(500);
-        setTimeout(() => setLoginError(''), 3000);
-        await sincronizarUsuarios();
-        await sincronizarVendedores();
-        return; // interrompe o fluxo de login
-      }
-
-      console.log('🔍 teste: ', resultado);
-      // Se a senha estiver correta, prossegue com o login
-      const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
-      await adicionarValor('@IDUSER', resultado.id?.toString() || '0');
-      await adicionarValor('@CNPJ', cnpjLimpo);
-      await adicionarValor('@empresa', codigoempresa.toString());      
-      await adicionarValor("@nomeEmpresa", empresa);
-
-      onLoginSuccess(cnpjLimpo);
-      navigation.navigate({ name: 'home', params: { cnpj: cnpjLimpo } });
-    } catch (error) {
-      setLoginError('Erro ao acessar banco local.');
-      Vibration.vibrate(500);
-      setTimeout(() => setLoginError(''), 3000);
-      console.log('Erro ao validar login local:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
+    onLoginSuccess(cnpjLimpo);
+    navigation.navigate({ name: 'home', params: { cnpj: cnpjLimpo } });
+  } catch (error) {
+    setLoginError('Erro ao acessar banco local.');
+    Vibration.vibrate(500);
+    setTimeout(() => setLoginError(''), 3000);
+    console.log('Erro ao validar login local:', error);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const limpar = () => {
     setCpfCnpj('');
@@ -259,9 +251,14 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
           <TextInput
             style={styles.campoDocumento}
             value={cpfCnpj}
-            onChangeText={setCpfCnpj}
+            onChangeText={(text) => {
+              // Remove qualquer caractere que não seja número
+              const onlyNumbers = text.replace(/[^0-9]/g, '');
+              setCpfCnpj(onlyNumbers);
+            }}
             keyboardType="numeric"
             placeholder="Digite CPF ou CNPJ"
+            maxLength={14}
             onBlur={handleBlurBuscar}
           />
         </>
@@ -314,10 +311,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
             )}
           </TouchableOpacity>
 
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
-            <TouchableOpacity onPress={() => GerarCatalago()}>
-              <Text style={{ color: 'orange', fontWeight: 'bold' }}>Catálogo</Text>
-            </TouchableOpacity>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>          
 
             <TouchableOpacity onPress={() => Linking.openURL('https://servidor-64qt.onrender.com/')}>
               <Text style={{ color: 'blue', fontWeight: 'bold' }}>Cadastrar usuário</Text>

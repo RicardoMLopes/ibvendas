@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,17 +8,17 @@ import {
   Platform,
   Alert,
   TextInput,
-  ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import { Swipeable } from 'react-native-gesture-handler';
 import { useSyncEmpresa } from '../database/sincronizacao';
 import styles from './styles';
 import { recuperarValor } from '../scripts/adicionarourecuperar';
 import ModalPedidoAcoes from './modalgerencial';
 import { gerarPdfPedido } from './gerarpdf';
 import type { PedidoDeVenda } from '../types/pedidotypes';
-import { formatDateBR, formatDateBRHora } from '../scripts/funcoes';
+import { formatDateBR } from '../scripts/funcoes';
 import { LoadingOverlay } from '../scripts/loading';
 
 type GerencPedido = {
@@ -37,14 +37,15 @@ export default function GerenciarPedidos() {
   const [dataFim, setDataFim] = useState<Date | null>(hoje);
   const [showPickerInicio, setShowPickerInicio] = useState(false);
   const [showPickerFim, setShowPickerFim] = useState(false);
-
   const [clienteFiltro, setClienteFiltro] = useState('');
   const [resultado, setResultado] = useState<PedidoDeVenda[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Modal
   const [modalVisivel, setModalVisivel] = useState(false);
   const [pedidoSelecionado, setPedidoSelecionado] = useState<PedidoDeVenda | null>(null);
+
+  // Referências dos Swipeable para fechar após ação
+  const swipeRefs = useRef<Map<number, Swipeable>>(new Map());
 
   const formatDate = (date: Date | null) => {
     if (!date) return '';
@@ -121,7 +122,6 @@ export default function GerenciarPedidos() {
   async function handleEnviarPDF(pedido: PedidoDeVenda) {
     try {
       setLoading(true);
-
       const empresaId = pedido.empresa;
       const numerodocumento = pedido.numerodocumento;
       const { carregarPedidoCompleto } = await useSyncEmpresa();
@@ -171,33 +171,117 @@ export default function GerenciarPedidos() {
     }
   }
 
-async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
-  try {
-    setLoading(true);
-    const { sincronizarPedidosSelecionados } = await useSyncEmpresa();
-    const sucesso = await sincronizarPedidosSelecionados([pedido.numerodocumento]);
+  async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
+    try {
+      setLoading(true);
+      const { sincronizarPedidosSelecionados } = await useSyncEmpresa();
+      const sucesso = await sincronizarPedidosSelecionados([pedido.numerodocumento]);
 
-    if (sucesso) {
-    //  Alert.alert('Sucesso', `Pedido ${pedido.numerodocumento} enviado com sucesso!`);
-      pesquisar(); // Atualiza lista
-      fecharModal(); // fecha apenas no sucesso
-    } else {
-      Alert.alert(
-        'Erro',
-        `Não foi possível enviar o pedido ${pedido.numerodocumento}. Tente novamente.`
-      );
+      if (sucesso) {
+        pesquisar();
+        fecharModal();
+      } else {
+        Alert.alert('Erro', `Não foi possível enviar o pedido ${pedido.numerodocumento}. Tente novamente.`);
+      }
+    } catch (err) {
+      console.error('Erro ao enviar pedido:', err);
+      Alert.alert('Erro', 'Ocorreu uma falha inesperada ao enviar o pedido. Por favor, tente novamente.');
+    } finally {
+      setLoading(false);
     }
-  } catch (err) {
-    console.error('Erro ao enviar pedido:', err);
-    Alert.alert(
-      'Erro',
-      'Ocorreu uma falha inesperada ao enviar o pedido. Por favor, tente novamente.'
-    );
-  } finally {
-    setLoading(false);
   }
-}
 
+  async function deletarPedido(pedido: PedidoDeVenda) {
+    if (pedido.status !== 'P') {
+      Alert.alert('Ação não permitida', 'Pedidos enviados não podem ser deletados.');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmação',
+      `Deseja realmente deletar o pedido ${pedido.numerodocumento}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Deletar',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              const { deletarPedidoPorNumero } = await useSyncEmpresa();
+              const sucesso = await deletarPedidoPorNumero(
+                pedido.empresa,
+                pedido.numerodocumento,
+                pedido.codigocliente
+              );
+
+              if (sucesso) {
+                Alert.alert('Sucesso', `Pedido ${pedido.numerodocumento} deletado.`);
+                pesquisar();
+              } else {
+                Alert.alert('Erro', 'Não foi possível deletar o pedido.');
+              }
+            } catch (err) {
+              console.error('Erro ao deletar pedido:', err);
+              Alert.alert('Erro', 'Falha ao deletar o pedido.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  async function copiarPedido(pedido: PedidoDeVenda) {
+    if (pedido.status !== 'R') {
+      Alert.alert('Atenção', 'Somente pedidos enviados podem ser copiados.');
+      return;
+    }
+
+    Alert.alert(
+      'Confirmação',
+      `Deseja criar uma cópia do pedido ${pedido.numerodocumento}?`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Sim',
+          onPress: async () => {
+            try {
+              setLoading(true);
+              const { DuplicarPedido } = await useSyncEmpresa();
+
+              const novoNumero = await DuplicarPedido(
+                Number(pedido.empresa),
+                Number(pedido.numerodocumento),
+                String(pedido.codigocliente)
+              );
+
+              // Atualiza lista e fecha todos os swipeables
+              pesquisar();
+              swipeRefs.current.forEach((swipe) => swipe.close());
+
+              Alert.alert('Sucesso', `Pedido copiado com novo número: ${novoNumero}`);
+            } catch (err) {
+              console.error('Erro ao copiar pedido:', err);
+              Alert.alert('Erro', 'Não foi possível copiar o pedido.');
+            } finally {
+              setLoading(false);
+            }
+          },
+        },
+      ]
+    );
+  }
+
+  const renderRightActions = (pedido: PedidoDeVenda) => (
+    <TouchableOpacity
+      style={{ backgroundColor: '#28a745', justifyContent: 'center', padding: 20 }}
+      onPress={() => copiarPedido(pedido)}
+    >
+      <Text style={{ color: '#fff', fontWeight: 'bold' }}>Copiar</Text>
+    </TouchableOpacity>
+  );
 
   return (
     <KeyboardAvoidingView
@@ -208,17 +292,11 @@ async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
 
       {/* FILTROS */}
       <View style={styles.filtrosLinha}>
-        <TouchableOpacity
-          style={styles.inputData}
-          onPress={() => setShowPickerInicio(true)}
-        >
+        <TouchableOpacity style={styles.inputData} onPress={() => setShowPickerInicio(true)}>
           <Text>{dataInicio ? formatDateBR(dataInicio.toISOString()) : 'Data Início'}</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.inputData}
-          onPress={() => setShowPickerFim(true)}
-        >
+        <TouchableOpacity style={styles.inputData} onPress={() => setShowPickerFim(true)}>
           <Text>{dataFim ? formatDateBR(dataFim.toISOString()) : 'Data Fim'}</Text>
         </TouchableOpacity>
       </View>
@@ -257,13 +335,7 @@ async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
           onSubmitEditing={pesquisar}
           clearButtonMode="while-editing"
         />
-
-        <TouchableOpacity
-          style={[styles.botaoPesquisar, { marginLeft: 8 }]}
-          onPress={pesquisar}
-          disabled={loading}
-          activeOpacity={0.7}
-        >
+        <TouchableOpacity style={[styles.botaoPesquisar, { marginLeft: 8 }]} onPress={pesquisar} disabled={loading} activeOpacity={0.7}>
           <Ionicons name="search" size={24} color="#fff" />
         </TouchableOpacity>
       </View>
@@ -271,7 +343,7 @@ async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
       {/* LISTA DE PEDIDOS */}
       <FlatList
         data={resultado}
-        keyExtractor={item => item.codigocliente + item.dataregistro}
+        keyExtractor={(item) => `${item.numerodocumento}-${item.codigocliente}`} // chave única
         style={styles.lista}
         contentContainerStyle={{ paddingBottom: 100 }}
         ListEmptyComponent={
@@ -281,58 +353,44 @@ async function enviarPedidoSelecionado(pedido: PedidoDeVenda) {
         }
         renderItem={({ item }) => {
           const nomeCliente = item.nomecliente ?? '';
-          const nomeFormatado = nomeCliente.length > 25
-            ? nomeCliente.match(/.{1,25}/g)?.join('\n')
-            : nomeCliente;
+          const nomeFormatado = nomeCliente.length > 25 ? nomeCliente.match(/.{1,25}/g)?.join('\n') : nomeCliente;
 
           return (
-            <TouchableOpacity onPress={() => abrirModal(item)}>
-              <View style={styles.item}>
-                <View style={styles.linhaClienteStatus}>
-                  <Text
-                    style={{
-                      maxWidth: '70%',
-                      flexWrap: 'wrap',
-                      fontSize: 16,
-                      fontWeight: 'bold',
-                      lineHeight: 20,
-                    }}
-                    numberOfLines={2}
-                  >
-                    {nomeFormatado}
-                  </Text>
-
-                  <View
-                    style={{
-                      backgroundColor: item.status === 'P' ? '#FFA500' : '#007bff',
-                      paddingVertical: 4,
-                      paddingHorizontal: 10,
-                      borderRadius: 12,
-                      minWidth: 90,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
-                      {item.status === 'P' ? 'PENDENTE' : 'ENVIADO'}
+            <Swipeable
+              ref={(ref) => { if (ref) swipeRefs.current.set(item.numerodocumento, ref); }}
+              renderRightActions={() => renderRightActions(item)}
+            >
+              <TouchableOpacity
+                onPress={() => abrirModal(item)}
+                onLongPress={() => { if (item.status === 'P') deletarPedido(item); else Alert.alert('Ação não permitida', 'Pedidos enviados não podem ser deletados.'); }}
+                delayLongPress={3000}
+              >
+                <View style={styles.item}>
+                  <View style={styles.linhaClienteStatus}>
+                    <Text style={{ maxWidth: '70%', flexWrap: 'wrap', fontSize: 16, fontWeight: 'bold', lineHeight: 20 }} numberOfLines={2}>
+                      {nomeFormatado}
                     </Text>
+                    <View style={{ backgroundColor: item.status === 'P' ? '#FFA500' : '#007bff', paddingVertical: 4, paddingHorizontal: 10, borderRadius: 12, minWidth: 90, alignItems: 'center', justifyContent: 'center' }}>
+                      <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 14 }}>
+                        {item.status === 'P' ? 'PENDENTE' : 'ENVIADO'}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.separador} />
+
+                  <View style={styles.linhaPedido}>
+                    <Text style={{ fontWeight: 'bold', marginTop: 2 }}>
+                      N.Pedido: <Text style={{ fontWeight: 'normal' }}>{item.numerodocumento}</Text>
+                    </Text>
+                    <Text style={{ fontWeight: 'bold', marginTop: 2 }}>
+                      Data: <Text style={{ fontWeight: 'normal' }}>{formatDateBR(item.dataregistro)}</Text>
+                    </Text>
+                    <Text style={styles.pedidoValor}>{formatarReais(item.valortotal)}</Text>
                   </View>
                 </View>
-
-                <View style={styles.separador} />
-
-                <View style={styles.linhaPedido}>
-                  <Text style={{ fontWeight: 'bold', marginTop: 2, }}>
-                    N.Pedido: <Text style={{ fontWeight: 'normal' }}>{item.numerodocumento}</Text>
-                  </Text>
-                  <Text style={{ fontWeight: 'bold', marginTop: 2, }}>
-                    Data:{' '}
-                    <Text style={{ fontWeight: 'normal' }}>{formatDateBR(item.dataregistro)}</Text>
-                  </Text>
-                  <Text style={styles.pedidoValor}>{formatarReais(item.valortotal)}</Text>
-                </View>
-              </View>
-            </TouchableOpacity>
+              </TouchableOpacity>
+            </Swipeable>
           );
         }}
       />

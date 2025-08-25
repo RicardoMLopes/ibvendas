@@ -212,3 +212,8 @@ export async function obterInfoArquivoLocal(nomeArquivo: string): Promise<{ mtim
     return null;
   }
 }
+
+export function arredondar(valor: number, casas: number = 2) {
+  const fator = Math.pow(10, casas);
+  return Math.round(valor * fator) / fator;
+}

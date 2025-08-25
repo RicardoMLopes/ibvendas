@@ -12,7 +12,7 @@ export type RootStackParamList = {
     nomecliente: string;
     pedidoNumero: string;
   };
-  listarcliente: undefined;
+  listarcliente: { selecionarHabilitado: boolean };
   SyncOptions: undefined;
   GerenciarPedidos:undefined;
   listarpagamento: {

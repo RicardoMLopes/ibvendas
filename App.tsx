@@ -1,11 +1,16 @@
 import React, { useMemo, useState } from 'react';
-import { SQLiteProvider, defaultDatabaseDirectory } from 'expo-sqlite';
 import { Platform } from 'react-native';
 import { NavigationContainer, DefaultTheme } from '@react-navigation/native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { enableScreens } from 'react-native-screens';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SQLiteProvider, defaultDatabaseDirectory } from 'expo-sqlite';
 import RoutesStacks from './src/routes/stacks';
 import { Paths } from 'expo-file-system/next';
 import { initializedatabase } from './src/database';
 
+// Habilita react-native-screens para melhorar performance de navegação
+enableScreens();
 
 export default function App() {
   const [cnpj, setCnpj] = useState<string | null>(null);
@@ -18,6 +23,7 @@ export default function App() {
     },
   };
 
+  // Define diretório do banco dependendo da plataforma
   const dbDirectory = useMemo(() => {
     if (Platform.OS === 'ios') {
       return Object.values(Paths.appleSharedContainers)?.[0]?.uri;
@@ -25,22 +31,23 @@ export default function App() {
     return defaultDatabaseDirectory;
   }, []);
 
-  const dbName = cnpj ? `db_${cnpj}.db` : undefined;
-
-return (
- <NavigationContainer theme={lightTheme}>
-  {cnpj ? (
-    <SQLiteProvider
-      databaseName={`${cnpj}.db`}
-      onInit={initializedatabase}
-      directory={dbDirectory}
-    >
-      <RoutesStacks onLoginSuccess={setCnpj} />
-    </SQLiteProvider>
-  ) : (
-    <RoutesStacks onLoginSuccess={setCnpj} />
-  )}
-</NavigationContainer>
-
-);
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <NavigationContainer theme={lightTheme}>
+          {cnpj ? (
+            <SQLiteProvider
+              databaseName={`${cnpj}.db`}
+              onInit={initializedatabase}
+              directory={dbDirectory}
+            >
+              <RoutesStacks onLoginSuccess={setCnpj} />
+            </SQLiteProvider>
+          ) : (
+            <RoutesStacks onLoginSuccess={setCnpj} />
+          )}
+        </NavigationContainer>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
 }
