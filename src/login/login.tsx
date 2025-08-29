@@ -199,6 +199,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     await adicionarValor('@CNPJ', cnpjLimpo);
     await adicionarValor('@empresa', codigoempresa.toString());
     await adicionarValor('@nomeEmpresa', empresa);
+    await adicionarValor('@usuario', usuarioUpper);
 
     onLoginSuccess(cnpjLimpo);
     navigation.navigate({ name: 'home', params: { cnpj: cnpjLimpo } });

@@ -42,6 +42,7 @@ interface Produto {
   acrescimo?: number;
   valorunitariovenda?: number;
   casasdecimais?: "0" | "1"; 
+  codigovendedor?: string;
 }
 
 type RouteParams = {
@@ -54,6 +55,7 @@ type RouteParams = {
   codigocondPagamento: string;
   nomecliente: string;
   acrescimo?: number;
+  cd_pedido?: string;
 };
 
 export default function ListarProdutos(props: ListarProdutosProps) {
@@ -70,6 +72,8 @@ export default function ListarProdutos(props: ListarProdutosProps) {
     acrescimo = 0,
   } = route.params as RouteParams;
 
+
+  const { cd_pedido } = route.params as RouteParams;
   const [busca, setBusca] = useState('');
   const [produtos, setProdutos] = useState<Produto[]>([]);
   const [mapaImagens, setMapaImagens] = useState<Record<string, string>>({});
@@ -83,9 +87,9 @@ export default function ListarProdutos(props: ListarProdutosProps) {
   const [unidadeFiltro, setUnidadeFiltro] = useState('');
   const [precoMin, setPrecoMin] = useState('');
   const [precoMax, setPrecoMax] = useState('');
-  const [filter, setfilter] =  useState<Produto[]>([]);
-
-
+  const [filter, setfilter] = useState<Produto[]>([]);
+  const [pedidoExistente, setPedidoExistente] = useState<any>(null); // Para verificar vendedor do pedido
+  
 
   useEffect(() => {
     const carregarImagens = async () => {
@@ -95,54 +99,68 @@ export default function ListarProdutos(props: ListarProdutosProps) {
     };
     carregarImagens();
   }, []);
- 
+
   function parseCasasDecimais(valor: any): "0" | "1" {
     if (valor === "1") return "1";
     return "0";
   }
 
-  const carregarDados = async () => {
-    const { ListarItens, carregarPedidoCompleto, gerarnumerodocumento } = await useSyncEmpresa();
-    try {
-      const itens = await ListarItens();
-      const itensComValorVenda = itens.map((produto) => {
-        const aplicarAcrescimo = produto.reajustacondicaopagamento === 'S';
-        const valorunitariovenda = aplicarAcrescimo
-          ? produto.precovenda * (1 + Number(acrescimo) / 100)
-          : produto.precovenda;
-        return {
-          ...produto,
-          valorunitariovenda,
-          casasdecimais: parseCasasDecimais(produto.casasdecimais),
-        };
-      });
+const carregarDados = async () => {
+  const { ListarItens, carregarPedidoCompleto, gerarnumerodocumento } = await useSyncEmpresa();
+  try {
+    // Carregar produtos
+    const itens = await ListarItens();
+    const itensComValorVenda = itens.map((produto) => {
+      const aplicarAcrescimo = produto.reajustacondicaopagamento === 'S';
+      const valorunitariovenda = aplicarAcrescimo
+        ? produto.precovenda * (1 + Number(acrescimo) / 100)
+        : produto.precovenda;
+      return {
+        ...produto,
+        valorunitariovenda,
+        casasdecimais: parseCasasDecimais(produto.casasdecimais),
+      };
+    });
 
-      setProdutos(itensComValorVenda);
-      setfilter(itensComValorVenda); // mostra todos inicialmente
+    setProdutos(itensComValorVenda);
+    setfilter(itensComValorVenda);
 
+    // Se for seleção de produtos, carregar pedido existente
+    if (permitirSelecao) {
+      const empresaString = await recuperarValor('@empresa');
+      const empresaNum = Number(empresaString);
+      let pedido = null;
 
-      if (permitirSelecao) {
-        const empresaString = await recuperarValor('@empresa');
-        const numeropedido = await gerarnumerodocumento(Number(empresaString), codigocliente);
-        const pedido = await carregarPedidoCompleto(Number(empresaString), Number(numeropedido));
+      console.log('cd_pedido recebido:', cd_pedido);
 
-        if (numeropedido && Number(empresaString) && pedido) {
-          const idsProdutos = pedido.itens.map((item) => item.produto.trim().toLowerCase());
-          setProdutosAdicionados(idsProdutos);
-        }
+      if (cd_pedido && empresaNum) {
+        pedido = await carregarPedidoCompleto(empresaNum, Number(cd_pedido));
       }
-    } catch (error) {
-      console.error('Erro ao carregar os produtos:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
 
-  useFocusEffect(
-    useCallback(() => {
-      carregarDados();
-    }, [acrescimo, permitirSelecao, codigocliente])
-  );
+      setPedidoExistente(pedido);
+
+      if (pedido && pedido.itens?.length > 0) {
+        const idsProdutos = pedido.itens.map((item: any) => item.produto.trim().toLowerCase());
+        setProdutosAdicionados(idsProdutos);
+      } else {
+        // Limpar produtos adicionados se não houver pedido ou itens
+        setProdutosAdicionados([]);
+      }
+    }
+  } catch (error) {
+    console.error('Erro ao carregar os produtos:', error);
+  } finally {
+    setLoading(false);
+  }
+};
+
+// Chamar carregarDados sempre que a tela ganhar foco e cd_pedido mudar
+useFocusEffect(
+  useCallback(() => {
+    carregarDados();
+  }, [cd_pedido, acrescimo, permitirSelecao, codigocliente])
+);
+
 
   useEffect(() => {
     if (!permitirSelecao) {
@@ -186,7 +204,7 @@ export default function ListarProdutos(props: ListarProdutosProps) {
                       borderRadius: 12,
                       paddingHorizontal: 6,
                       minHeight: 24,
-                      minWidth: 24,
+                      minWidth: 40,
                       alignItems: 'center',
                       justifyContent: 'center',
                       zIndex: 999,
@@ -218,7 +236,6 @@ export default function ListarProdutos(props: ListarProdutosProps) {
 
     atualizarHeader();
   }, [produtosAdicionados, permitirSelecao, navigation, codigocliente]);
-
 
   useEffect(() => {
     const resultado = produtos.filter((item) => {
@@ -258,16 +275,27 @@ export default function ListarProdutos(props: ListarProdutosProps) {
     setfilter(resultado);
   }, [busca, agrupamentoFiltro, codigoBarraFiltro, unidadeFiltro, precoMin, precoMax, produtos]);
 
+  const lidarComClique = async (item: Produto) => {
+    if (!permitirSelecao) return;
 
-  const lidarComClique = (item: Produto) => {
-    if (permitirSelecao) {
-      setItemSelecionado({
-        ...item,
-        casasdecimais: item.casasdecimais ?? '0',
-        percentualdesconto: item.percentualdesconto ?? 0,
-      });
-      setModalVisivel(true);
+    // Define o vendedor correto para o item
+    let vendedorParaItem = codigovendedor;
+
+    if (pedidoExistente?.cabecalho?.codigovendedor) {
+      vendedorParaItem = pedidoExistente.cabecalho.codigovendedor;
+    } else {
+      const vendedorSalvo = await recuperarValor('@CodigoVendedor');
+      vendedorParaItem = vendedorSalvo ?? codigovendedor;
     }
+
+    setItemSelecionado({
+      ...item,
+      casasdecimais: item.casasdecimais ?? '0',
+      percentualdesconto: item.percentualdesconto ?? 0,
+      codigovendedor: vendedorParaItem,
+    });
+
+    setModalVisivel(true);
   };
 
   const confirmarItem = async (itemConfirmado: {
@@ -302,55 +330,48 @@ export default function ListarProdutos(props: ListarProdutosProps) {
     const codigoNormalizado = item.codigo.trim().toLowerCase();
     const foiAdicionado = produtosAdicionados.includes(codigoNormalizado);
 
-const compartilharImagem = async () => {
-  try {
-    if (!uriImagem) {
-      alert('Imagem não disponível para compartilhamento');
-      return;
-    }
+    const compartilharImagem = async () => {
+      try {
+        if (!uriImagem) {
+          alert('Imagem não disponível para compartilhamento');
+          return;
+        }
 
-    let caminhoParaCompartilhar: string;
+        let caminhoParaCompartilhar: string;
+        const nomeArquivo = `${item.codigo}.jpg`;
+        const destino = FileSystem.cacheDirectory + nomeArquivo;
 
-    // Sempre copia/baixa a imagem para cache local
-    const nomeArquivo = `${item.codigo}.jpg`;
-    const destino = FileSystem.cacheDirectory + nomeArquivo;
+        if (uriImagem.startsWith('http://') || uriImagem.startsWith('https://')) {
+          const download = await FileSystem.downloadAsync(uriImagem, destino);
+          caminhoParaCompartilhar = download.uri;
+        } else {
+          await FileSystem.copyAsync({ from: uriImagem, to: destino });
+          caminhoParaCompartilhar = destino;
+        }
 
-    // Se for URL HTTP/HTTPS, baixa
-    if (uriImagem.startsWith('http://') || uriImagem.startsWith('https://')) {
-      const download = await FileSystem.downloadAsync(uriImagem, destino);
-      caminhoParaCompartilhar = download.uri;
-    }
-    // Se for local, copia para cache
-    else {
-      await FileSystem.copyAsync({ from: uriImagem, to: destino });
-      caminhoParaCompartilhar = destino;
-    }
+        const fileInfo = await FileSystem.getInfoAsync(caminhoParaCompartilhar);
+        if (!fileInfo.exists) {
+          alert('Erro: arquivo não encontrado para compartilhamento');
+          return;
+        }
 
-    // Confirma que o arquivo existe
-    const fileInfo = await FileSystem.getInfoAsync(caminhoParaCompartilhar);
-    if (!fileInfo.exists) {
-      alert('Erro: arquivo não encontrado para compartilhamento');
-      return;
-    }
+        const mensagem = `Produto: ${item.descricao}\nCódigo de Barra: ${item.codigobarra || 'Não informado'}`;
 
-    const mensagem = `Produto: ${item.descricao}\nCódigo de Barra: ${item.codigobarra || 'Não informado'}`;
+        await Share.open({
+          title: 'Compartilhar produto',
+          message: mensagem,
+          url: caminhoParaCompartilhar.startsWith('file://') ? caminhoParaCompartilhar : 'file://' + caminhoParaCompartilhar,
+          type: 'image/jpeg',
+        });
 
-    await Share.open({
-      title: 'Compartilhar produto',
-      message: mensagem,
-      url: caminhoParaCompartilhar.startsWith('file://') ? caminhoParaCompartilhar : 'file://' + caminhoParaCompartilhar,
-      type: 'image/jpeg',
-    });
+      } catch (error: any) {
+        if (error?.message !== 'User did not share') {
+          console.error('Erro ao compartilhar a imagem:', error);
+          alert('Erro ao compartilhar a imagem. Tente novamente.');
+        }
+      }
+    };
 
-  } catch (error: any) {
-    if (error?.message !== 'User did not share') {
-      console.error('Erro ao compartilhar a imagem:', error);
-      alert('Erro ao compartilhar a imagem. Tente novamente.');
-    }
-  }
-};
-
-   
     return (
       <View style={[styles.card, foiAdicionado && styles.cardSelecionado]}>
         <View style={styles.item}>
@@ -377,7 +398,6 @@ const compartilharImagem = async () => {
               style={styles.imagemGrande}
               resizeMode="contain"
             />
-            {/* Botão para compartilhar */}
             <TouchableOpacity
               style={{
                 position: 'absolute',
@@ -456,77 +476,77 @@ const compartilharImagem = async () => {
           onAdicionarItem={confirmarItem}
           empresa={empresa}
           codigocliente={codigocliente}
-          codigovendedor={codigovendedor}
+          codigovendedor={itemSelecionado.codigovendedor ?? ''} // CORREÇÃO APLICADA
           codigocondPagamento={codigocondPagamento}
           nomecliente={nomecliente}
         />
       )}
 
       <Modal visible={filtroVisivel} transparent animationType="slide">
-      <View style={styles.modalFiltro}>
-        <View style={styles.modalContent}>
-          <Text style={styles.tituloModal}>🔍 Filtros Avançados</Text>
+        <View style={styles.modalFiltro}>
+          <View style={styles.modalContent}>
+            <Text style={styles.tituloModal}>🔍 Filtros Avançados</Text>
 
-          <Text style={styles.labelModal}>Agrupamento</Text>
-          <TextInput
-            style={styles.inputModal}
-            placeholder="Agrupamento"
-            placeholderTextColor={'#999'}
-            value={agrupamentoFiltro}
-            onChangeText={setAgrupamentoFiltro}
-          />
-
-          <Text style={styles.labelModal}>Código de Barra</Text>
-          <TextInput
-            style={styles.inputModal}
-            placeholder="Código de Barra"
-            placeholderTextColor={'#999'}
-            value={codigoBarraFiltro}
-            onChangeText={setCodigoBarraFiltro}
-            keyboardType="numeric"
-          />
-
-          <Text style={styles.labelModal}>Unidade de Medida</Text>
-          <TextInput
-            style={styles.inputModal}
-            placeholder="Unidade de Medida"
-            placeholderTextColor={'#999'}
-            value={unidadeFiltro}
-            onChangeText={setUnidadeFiltro}
-          />
-
-          <Text style={styles.labelModal}>Faixa de Preço</Text>
-          <View style={styles.linhaPreco}>
+            <Text style={styles.labelModal}>Agrupamento</Text>
             <TextInput
-              style={[styles.inputModal, { flex: 1, marginRight: 5 }]}
-              placeholder="0,00"
+              style={styles.inputModal}
+              placeholder="Agrupamento"
               placeholderTextColor={'#999'}
-              value={precoMin}
-              onChangeText={setPrecoMin}
+              value={agrupamentoFiltro}
+              onChangeText={setAgrupamentoFiltro}
+            />
+
+            <Text style={styles.labelModal}>Código de Barra</Text>
+            <TextInput
+              style={styles.inputModal}
+              placeholder="Código de Barra"
+              placeholderTextColor={'#999'}
+              value={codigoBarraFiltro}
+              onChangeText={setCodigoBarraFiltro}
               keyboardType="numeric"
             />
+
+            <Text style={styles.labelModal}>Unidade de Medida</Text>
             <TextInput
-              style={[styles.inputModal, { flex: 1, marginLeft: 5 }]}
-              placeholder="999.999,99"
+              style={styles.inputModal}
+              placeholder="Unidade de Medida"
               placeholderTextColor={'#999'}
-              value={precoMax}
-              onChangeText={setPrecoMax}
-              keyboardType="numeric"
+              value={unidadeFiltro}
+              onChangeText={setUnidadeFiltro}
             />
-          </View>
 
-          <View style={styles.botoesModal}>
-            <TouchableOpacity style={styles.botaoModal} onPress={() => setFiltroVisivel(false)}>
-              <Text style={styles.textoBotaoModal}>Aplicar Filtros</Text>
-            </TouchableOpacity>
+            <Text style={styles.labelModal}>Faixa de Preço</Text>
+            <View style={styles.linhaPreco}>
+              <TextInput
+                style={[styles.inputModal, { flex: 1, marginRight: 5 }]}
+                placeholder="0,00"
+                placeholderTextColor={'#999'}
+                value={precoMin}
+                onChangeText={setPrecoMin}
+                keyboardType="numeric"
+              />
+              <TextInput
+                style={[styles.inputModal, { flex: 1, marginLeft: 5 }]}
+                placeholder="999.999,99"
+                placeholderTextColor={'#999'}
+                value={precoMax}
+                onChangeText={setPrecoMax}
+                keyboardType="numeric"
+              />
+            </View>
 
-            <TouchableOpacity style={[styles.botaoModal, { backgroundColor: '#ccc' }]} onPress={() => setFiltroVisivel(false)}>
-              <Text style={[styles.textoBotaoModal, { color: '#333' }]}>Cancelar</Text>
-            </TouchableOpacity>
+            <View style={styles.botoesModal}>
+              <TouchableOpacity style={styles.botaoModal} onPress={() => setFiltroVisivel(false)}>
+                <Text style={styles.textoBotaoModal}>Aplicar Filtros</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity style={[styles.botaoModal, { backgroundColor: '#ccc' }]} onPress={() => setFiltroVisivel(false)}>
+                <Text style={[styles.textoBotaoModal, { color: '#333' }]}>Cancelar</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
-    </Modal>
+      </Modal>
 
     </View>
   );

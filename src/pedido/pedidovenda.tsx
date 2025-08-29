@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
@@ -10,11 +10,11 @@ import {
   ActivityIndicator
 } from 'react-native';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
-import { Ionicons } from '@expo/vector-icons';
 import { styles } from './stylespedido';
 import { useSyncEmpresa } from '../database/sincronizacao';
-import { adicionarValor, recuperarValor } from '../scripts/adicionarourecuperar';
+import { recuperarValor } from '../scripts/adicionarourecuperar';
 import ModalEditarItem from './modalpedidoitens';
+import { EnviarEmail } from '../email/servidoremail';
 
 interface ItemPedido {
   produto: string;
@@ -30,9 +30,12 @@ interface ItemPedido {
 }
 
 interface CabecalhoPedido {
+  numerodocumento?: number;
+  codigocliente: string;
   nomecliente: string;
+  codigovendedor: string;
   nomevendedor: string;
-  descricaoforma: string;
+  codigoformaPgto: string;
   valorDesconto: number;
   valorDespesas: number;
   valorFrete: number;
@@ -44,14 +47,21 @@ interface CabecalhoPedido {
 const TelaPedido: React.FC = () => {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
-  const { empresa, cd_pedido, codigocliente } = route.params;
+
+  const empresa = route.params?.empresa ?? '';
+  const cd_pedido = route.params?.cd_pedido ?? 0;
+  const codigocliente = route.params?.codigocliente ?? '';
+  const CNPJ = route.params?.cnpj ?? '';
+
+  
+//  console.log('📌 TelaPedido aberta com params:', {    cd_pedido,    empresa,    codigocliente  });
 
   const [itens, setItens] = useState<ItemPedido[]>([]);
   const [cliente, setCliente] = useState('');
   const [vendedor, setVendedor] = useState('');
   const [cabecalho, setCabecalho] = useState<CabecalhoPedido | null>(null);
   const [loading, setLoading] = useState(true);
-  const [pedidoEnviado, setPedidoEnviado] = useState(false); // novo estado
+  const [pedidoEnviado, setPedidoEnviado] = useState(false);
 
   const [modalObsVisivel, setModalObsVisivel] = useState(false);
   const [modalDescontoVisivel, setModalDescontoVisivel] = useState(false);
@@ -62,36 +72,86 @@ const TelaPedido: React.FC = () => {
   const [itemSelecionado, setItemSelecionado] = useState<ItemPedido | null>(null);
 
   const [modalConfirmacaoVisivel, setModalConfirmacaoVisivel] = useState(false);
-  const [enviando, setEnviando] = useState(false); // spinner de envio
+  const [enviando, setEnviando] = useState(false);
+  const [pedidoAtual, setPedidoAtual] = useState<number>(cd_pedido);
 
-  const CNPJ = route.params.cnpj;
-
+  // --------------------- Recarregar Pedido ---------------------
   const recarregarPedido = async () => {
-    try {
-      const sync = await useSyncEmpresa();
-      const pedidocompleto = await sync.carregarPedidoCompleto(empresa, cd_pedido);
-      if (!pedidocompleto) return;
-
-      const { cabecalho, itens } = pedidocompleto;
-
-      const itensComCasas = itens.map((item: ItemPedido) => ({
-        ...item,
-        casasdecimais: item.casasdecimais ?? "0",
-        numerodocumento: cd_pedido,
-      }));
-
-      setCliente(cabecalho.nomecliente ?? '');
-      setVendedor(cabecalho.nomevendedor ?? '');
-      setCabecalho(cabecalho);
-      setItens(itensComCasas);
-      setObservacao(cabecalho.Observacao ?? '');
-      setPedidoEnviado(cabecalho.enviado ?? false); // define se já foi enviado
-    } catch (error) {
-      console.error('Erro ao recarregar pedido:', error);
-    } finally {
-      setLoading(false);
+  setLoading(true);
+  try {
+    const sync = await useSyncEmpresa();
+    if (!sync) {
+      console.warn('useSyncEmpresa retornou null ou undefined');
+      return;
     }
-  };
+
+    const pedidocompleto = await sync.carregarPedidoCompleto(empresa, cd_pedido);
+    if (!pedidocompleto) {
+      console.warn('carregarPedidoCompleto retornou null ou undefined');
+      return;
+    }
+
+    // Log completo para debug
+  //  console.log('Pedido completo carregado:', pedidocompleto);
+
+    // Garantir que numerodocumento do cabeçalho seja número
+    const numeroPedidoReal = Number(pedidocompleto.cabecalho?.numerodocumento);
+    if (!numeroPedidoReal || numeroPedidoReal === 0) {
+      throw new Error('Número do pedido não encontrado ou inválido no cabecalho!');
+    }
+  //  console.log('NumeroPedidoReal:', numeroPedidoReal);
+    setPedidoAtual(numeroPedidoReal);
+
+    // Mapear itens, garantindo numerodocumento consistente
+    const itensComNumerodocumentoAtual = (pedidocompleto.itens ?? []).map((item: ItemPedido) => {
+      const numerodocumentoItem = Number(item.numerodocumento ?? numeroPedidoReal);
+      const quantidade = Number(item.quantidade ?? 0);
+      const valorunitariovenda = Number(item.valorunitariovenda ?? 0);
+      const valorDesconto = Number(item.valorDesconto ?? 0);
+      const valoracrescimo = Number(item.valoracrescimo ?? 0);
+      const valorTotal = Number(item.valorTotal ?? (quantidade * valorunitariovenda - valorDesconto + valoracrescimo));
+
+      return {
+        ...item,
+        numerodocumento: numerodocumentoItem,
+        quantidade,
+        valorunitariovenda,
+        valorDesconto,
+        valoracrescimo,
+        valorTotal,
+        casasdecimais: item.casasdecimais ?? "0"
+      };
+    });
+
+   // console.log('Itens processados:', itensComNumerodocumentoAtual);
+
+    const cabecalhoAtualizado: CabecalhoPedido = {
+      ...pedidocompleto.cabecalho,
+      numerodocumento: numeroPedidoReal,
+      valorDesconto: Number(pedidocompleto.cabecalho?.valorDesconto ?? 0),
+      valorDespesas: Number(pedidocompleto.cabecalho?.valorDespesas ?? 0),
+      valorFrete: Number(pedidocompleto.cabecalho?.valorFrete ?? 0),
+      valorTotal: String(pedidocompleto.cabecalho?.valorTotal ?? itensComNumerodocumentoAtual.reduce(
+        (acc, item) => acc + item.valorTotal, 0))
+    };
+
+  //  console.log('Cabecalho atualizado:', cabecalhoAtualizado);
+
+    setCabecalho(cabecalhoAtualizado);
+    setCliente(cabecalhoAtualizado.nomecliente ?? '');
+    setVendedor(cabecalhoAtualizado.nomevendedor ?? '');
+    setItens(itensComNumerodocumentoAtual);
+    setObservacao(cabecalhoAtualizado.Observacao ?? '');
+    setPedidoEnviado(cabecalhoAtualizado.enviado ?? false);
+
+  } catch (error) {
+    console.error('Erro ao recarregar pedido:', error);
+    Alert.alert('Erro', 'Não foi possível carregar o pedido. Veja o console para mais detalhes.');
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   useFocusEffect(
     useCallback(() => {
@@ -99,66 +159,22 @@ const TelaPedido: React.FC = () => {
     }, [empresa, cd_pedido, codigocliente])
   );
 
-  useEffect(() => {
-    navigation.setOptions({
-      headerTitle: 'Pedido',
-      headerLeft: () => (
-        <TouchableOpacity onPress={() => navigation.goBack()} style={{ paddingHorizontal: 15 }}>
-          <Ionicons name="arrow-back" size={24} color="#000" />
-        </TouchableOpacity>
-      ),
-      headerRight: () => {
-        if (!cabecalho) return null;
-        return (
-          <TouchableOpacity
-            onPress={async () => {
-              try {
-                const codigoForma = cabecalho.descricaoforma ?? 'defaultCodigo';
-                const clienteId = codigocliente ?? '00000';
-                const clienteNome = cabecalho.nomecliente || 'Cliente';
-                const pedidoNumero = cd_pedido;
-                const acrescimo = 0;
-                await adicionarValor('@forma', codigoForma);
-                navigation.navigate('listaritens', {
-                  formaId: codigoForma,
-                  codigocliente: clienteId,
-                  codigovendedor: '00001',
-                  codigocondPagamento: codigoForma,
-                  nomecliente: clienteNome,
-                  pedidoNumero,
-                  permitirSelecao: true,
-                  exibirModal: true,
-                  acrescimo,
-                });
-              } catch (error) {
-                console.error('Erro ao navegar para ListarProdutos:', error);
-              }
-            }}
-            style={{ paddingHorizontal: 15 }}
-          >
-            <Ionicons name="logo-buffer" size={24} color="#000" />
-          </TouchableOpacity>
-        );
-      },
-    });
-  }, [navigation, cabecalho, cd_pedido, codigocliente]);
-
-  if (loading) {
-    return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-        <Text>Carregando pedido...</Text>
-      </View>
-    );
-  }
-
+  // --------------------- Cálculos ---------------------
   const totalItens = itens.reduce((acc, item) => acc + item.quantidade * (item.valorunitariovenda ?? 0), 0);
-  const totalFinal = itens.reduce((acc, item) => acc + (item.quantidade * (item.valorunitariovenda ?? 0) - (item.valorDesconto ?? 0) + (item.valoracrescimo ?? 0)), 0);
+  const totalDesconto = itens.reduce((acc, item) => acc + (item.valorDesconto ?? 0), 0);
+  const totalAcrescimo = itens.reduce((acc, item) => acc + (item.valoracrescimo ?? 0), 0);
+  const totalFinal = itens.reduce(
+    (acc, item) =>
+      acc + (item.quantidade * (item.valorunitariovenda ?? 0) - (item.valorDesconto ?? 0) + (item.valoracrescimo ?? 0)),
+    0
+  );
 
   const formatQuantidade = (qty: number, casasdecimais?: string | "0" | "1") => {
-    if (casasdecimais === "0") return qty.toFixed(2);
-    return qty.toFixed(3);
+    const valor = Number(qty ?? 0);
+    return casasdecimais === "0" ? valor.toFixed(2) : valor.toFixed(3);
   };
 
+  // --------------------- Modais ---------------------
   const abrirModalEditar = (item: ItemPedido) => {
     setItemSelecionado(item);
     setModalEditarVisivel(true);
@@ -175,11 +191,10 @@ const TelaPedido: React.FC = () => {
       const sync = await useSyncEmpresa();
       const sucesso = await sync.atualizarPedido(
         empresa,
-        cd_pedido,
+        itemSelecionado.numerodocumento ?? cabecalho?.numerodocumento ?? pedidoAtual,
         codigocliente,
         itemSelecionado.produto,
         quantidadeAtualizada,
-        observacao
       );
       if (!sucesso) {
         Alert.alert('Erro', 'Falha ao atualizar o pedido.');
@@ -188,7 +203,18 @@ const TelaPedido: React.FC = () => {
       await recarregarPedido();
       fecharModalEditar();
     } catch (error) {
-      console.error('Erro ao salvar item e atualizar pedido:', error);
+      await EnviarEmail({
+                      to: ['ricardomachadolopes@gmail.com', 'eldovane@gmail.com'], // ✅ lista de strings
+                      subject: 'Editar Item',
+                      message: 'Erro ao realizar edição do item do pedido',
+                      jsonData: {
+                        NumeroPedido: itemSelecionado.numerodocumento ?? cabecalho?.numerodocumento ?? pedidoAtual,
+                        codigocliente: codigocliente,
+                        produto: itemSelecionado.produto,
+                        quantidade: quantidadeAtualizada,
+                        usuario: await recuperarValor("@usuario"),
+                      },  
+                    });
       Alert.alert('Erro', 'Não foi possível salvar o item editado.');
     }
   };
@@ -196,7 +222,6 @@ const TelaPedido: React.FC = () => {
   const salvarPedidoRodape = async () => {
     try {
       await recarregarPedido();
-      // mensagem de sucesso removida
     } catch (error) {
       console.error('Erro ao salvar pedido:', error);
       Alert.alert('Erro', 'Ocorreu um erro ao salvar o pedido.');
@@ -229,14 +254,12 @@ const TelaPedido: React.FC = () => {
     try {
       await salvarPedidoRodape();
       const { sincronizarPedidosSelecionados } = await useSyncEmpresa();
-      const sucesso = await sincronizarPedidosSelecionados([cd_pedido]);
+      const sucesso = await sincronizarPedidosSelecionados([cabecalho?.numerodocumento ?? pedidoAtual]);
       if (sucesso) {
-       /// Alert.alert('Sucesso', 'Pedido enviado com sucesso.');
         setPedidoEnviado(true);
         setModalConfirmacaoVisivel(false);
-        // 🔹 Redireciona para a Home após enviar
         const CNPJ = await recuperarValor("@cnpj");
-        navigation.reset({index: 0, routes: [{ name: 'home', params: { cnpj: CNPJ } }],});
+        navigation.reset({index: 0, routes: [{ name: 'home', params: { cnpj: CNPJ } }]});
       } else {
         Alert.alert('Erro', 'Falha ao enviar o pedido. Tente novamente.');
       }
@@ -251,7 +274,7 @@ const TelaPedido: React.FC = () => {
   const salvarObservacao = async () => {
     try {
       const sync = await useSyncEmpresa();
-      const sucesso = await sync.atualizarObservacao(empresa, cd_pedido, codigocliente, observacao);
+      const sucesso = await sync.atualizarObservacao(empresa, pedidoAtual, codigocliente, observacao);
       if (!sucesso) {
         Alert.alert('Erro', 'Falha ao salvar a observação.');
         return;
@@ -295,6 +318,15 @@ const TelaPedido: React.FC = () => {
     }
   };
 
+  // --------------------- Render ---------------------
+  if (loading) {
+    return (
+      <View style={{ flex:1, justifyContent:'center', alignItems:'center' }}>
+        <ActivityIndicator size="large" color="#000" />
+      </View>
+    );
+  }
+
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -308,19 +340,33 @@ const TelaPedido: React.FC = () => {
           <Text style={[styles.infoFixa, { flex: 1, textAlign: 'right' }]}>{vendedor}</Text>
         </View>
         <View style={{ marginTop: 2 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Text style={styles.TextTotais}>Total Produtos:</Text>
-            <Text style={styles.TextVrTotais}>R$ {totalItens.toFixed(2)}</Text>
-          </View>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Text style={styles.TextTotais}>Total Desconto:</Text>
-            <Text style={styles.TextVrTotais}>R$ {(cabecalho?.valorDesconto ?? 0).toFixed(2)}</Text>
-          </View>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-            <Text style={styles.TextTotais}>Total Pedido:</Text>
-            <Text style={styles.TextVrTotais}>R$ {totalFinal.toFixed(2)}</Text>
-          </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={styles.TextTotais}>Total Produtos:</Text>
+          <Text style={styles.TextVrTotais}>
+            {(totalItens ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </Text>
         </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={styles.TextTotais}>Total Desconto:</Text>
+          <Text style={styles.TextVrTotais}>
+            {(totalDesconto ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </Text>
+        </View>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={styles.TextTotais}>Total Acréscimo:</Text>
+          <Text style={styles.TextVrTotais}>
+            {(totalAcrescimo ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </Text>
+        </View>
+
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+          <Text style={styles.TextTotais}>Total Pedido:</Text>
+          <Text style={styles.TextVrTotais}>
+            {(totalFinal ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+          </Text>
+        </View>
+      </View>
+
         <View style={{ flexDirection: 'row', marginTop: 16 }}>
           <TouchableOpacity onPress={() => setModalObsVisivel(true)} style={[styles.botaoInformarObs, { flex: 1, marginRight: 8 }]}>
             <Text style={styles.TextBottun}>Observação</Text>
@@ -462,8 +508,9 @@ const TelaPedido: React.FC = () => {
         <ModalEditarItem
           visivel={modalEditarVisivel}
           descricaoProduto={itemSelecionado.descricaoproduto}
-          quantidadeInicial={itemSelecionado.quantidade}
-          numerodocumento={cd_pedido}
+          quantidadeInicial={itemSelecionado.quantidade}          
+          numerodocumento={itemSelecionado.numerodocumento ?? pedidoAtual}
+
           codigocliente={codigocliente}
           codigoproduto={itemSelecionado.produto}
           empresa={empresa}
@@ -472,7 +519,7 @@ const TelaPedido: React.FC = () => {
           onSalvar={salvarItemEditado}
           onDeletar={async () => {
             try {
-              await deletarItemComDados(itemSelecionado.produto, cd_pedido, codigocliente);
+              await deletarItemComDados(itemSelecionado.produto, itemSelecionado.numerodocumento ?? pedidoAtual, codigocliente);
               fecharModalEditar();
             } catch (error) {
               console.error('Erro ao deletar item:', error);

@@ -24,7 +24,7 @@ export async function initializedatabase(database: SQLiteDatabase) {
     CREATE TABLE IF NOT EXISTS cadproduto (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa INTEGER NOT NULL DEFAULT 0,
-      codigo TEXT NOT NULL DEFAULT '',
+      codigo  VARCHAR(5) NOT NULL DEFAULT '',
       descricao TEXT NOT NULL DEFAULT '',
       unidadeMedida TEXT,
       codigobarra TEXT,
@@ -93,7 +93,7 @@ export async function initializedatabase(database: SQLiteDatabase) {
     CREATE TABLE IF NOT EXISTS cadvendedor (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa INTEGER NOT NULL DEFAULT 0,
-      codigo TEXT NOT NULL DEFAULT '',
+      codigo  VARCHAR(5) NOT NULL DEFAULT '',
       codigorota INTEGER DEFAULT 0,
       nome TEXT NOT NULL DEFAULT '',
       situacaoRegistro TEXT NOT NULL DEFAULT 'I',
@@ -104,8 +104,8 @@ export async function initializedatabase(database: SQLiteDatabase) {
     CREATE TABLE IF NOT EXISTS cadcliente (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa INTEGER NOT NULL DEFAULT 0,
-      codigo TEXT NOT NULL DEFAULT '',
-      codigovendedor TEXT DEFAULT '0',
+      codigo  VARCHAR(5) NOT NULL DEFAULT '',
+      codigovendedor  VARCHAR(5) NOT NULL DEFAULT '',
       nome TEXT NOT NULL DEFAULT '',
       contato TEXT DEFAULT '',
       cpfCnpj TEXT DEFAULT '',
@@ -127,7 +127,7 @@ export async function initializedatabase(database: SQLiteDatabase) {
     CREATE TABLE IF NOT EXISTS cadcondicaopagamento (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa INTEGER NOT NULL DEFAULT 0,
-      codigo TEXT NOT NULL DEFAULT '',
+      codigo  VARCHAR(5) NOT NULL DEFAULT '',
       descricao TEXT DEFAULT '',
       acrescimo REAL NOT NULL DEFAULT 0.0,
       desconto REAL NOT NULL DEFAULT 0.0,
@@ -140,11 +140,10 @@ export async function initializedatabase(database: SQLiteDatabase) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa INTEGER NOT NULL DEFAULT 0,
       numerodocumento INTEGER NOT NULL DEFAULT 0,
-      codigocondPagamento TEXT NOT NULL DEFAULT '',
-      codigovendedor TEXT NOT NULL DEFAULT '',
-      codigocliente TEXT NOT NULL DEFAULT '',
+      codigocondPagamento VARCHAR(5) NOT NULL DEFAULT '',
+      codigovendedor  VARCHAR(5) NOT NULL DEFAULT '',
+      codigocliente  VARCHAR(5) NOT NULL DEFAULT '',
       nomecliente TEXT DEFAULT '',
-      codigopedido INTEGER DEFAULT 0,
       valorDesconto REAL NOT NULL DEFAULT 0.0,
       valorDespesas REAL NOT NULL DEFAULT 0.0,
       valorFrete REAL NOT NULL DEFAULT 0.0,
@@ -161,8 +160,8 @@ export async function initializedatabase(database: SQLiteDatabase) {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa INTEGER NOT NULL DEFAULT 0,
       numerodocumento INTEGER NOT NULL DEFAULT 0,
-      codigovendedor TEXT NOT NULL DEFAULT '',
-      codigoproduto TEXT NOT NULL DEFAULT '',
+      codigovendedor  VARCHAR(5) NOT NULL DEFAULT '',
+      codigoproduto  VARCHAR(5) NOT NULL DEFAULT '',
       descricaoproduto TEXT DEFAULT '',
       valorUnitario REAL DEFAULT 0.0,
       valorunitariovenda REAL DEFAULT 0.0,
@@ -172,15 +171,15 @@ export async function initializedatabase(database: SQLiteDatabase) {
       quantidade INTEGER DEFAULT 0,
       situacaoRegistro TEXT NOT NULL DEFAULT 'I',
       dataRegistro TEXT DEFAULT '',
-      codigocliente TEXT DEFAULT ''
+      codigocliente  VARCHAR(5) NOT NULL DEFAULT ''
     );
 
     CREATE TABLE IF NOT EXISTS movfinanceiro (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa TEXT NOT NULL DEFAULT '',
       nomecomputador TEXT NOT NULL DEFAULT '',
-      codigocliente TEXT NOT NULL DEFAULT '',
-      codigotipoDocumento TEXT NOT NULL DEFAULT '',
+      codigocliente  VARCHAR(5) NOT NULL DEFAULT '',
+      codigotipoDocumento  VARCHAR(5) NOT NULL DEFAULT '',
       numeroDocumento TEXT NOT NULL DEFAULT '',
       parcela REAL NOT NULL DEFAULT 0.0,
       movimentacao TEXT NOT NULL DEFAULT '',
@@ -197,7 +196,7 @@ export async function initializedatabase(database: SQLiteDatabase) {
     CREATE TABLE IF NOT EXISTS cadusers (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       empresa TEXT NOT NULL DEFAULT '',
-      codigovendedor INTEGER NOT NULL DEFAULT 0,
+      codigovendedor  VARCHAR(5) NOT NULL DEFAULT '',
       usuario TEXT NOT NULL UNIQUE DEFAULT '',
       senha TEXT NOT NULL DEFAULT '',
       token TEXT DEFAULT '',
@@ -206,6 +205,12 @@ export async function initializedatabase(database: SQLiteDatabase) {
       dataregistro DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (codigovendedor) REFERENCES cadvendedor(codigovendedor)
     );
+
+    CREATE TABLE IF NOT EXISTS config (
+      chave TEXT PRIMARY KEY,
+      valor TEXT
+    );
+
   `;
 
   await database.execAsync(createSQL);

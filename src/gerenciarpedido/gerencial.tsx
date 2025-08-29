@@ -8,6 +8,8 @@ import {
   Platform,
   Alert,
   TextInput,
+  Modal,
+  Switch,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -20,6 +22,10 @@ import { gerarPdfPedido } from './gerarpdf';
 import type { PedidoDeVenda } from '../types/pedidotypes';
 import { formatDateBR } from '../scripts/funcoes';
 import { LoadingOverlay } from '../scripts/loading';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { RootStackParamList } from '../types/navigationTypes';
+import { EnviarEmail } from '../email/servidoremail';
 
 type GerencPedido = {
   numerodocumento: number;
@@ -31,6 +37,8 @@ type GerencPedido = {
   valorTotal: number;
 };
 
+type Props = NativeStackScreenProps<RootStackParamList, 'listarcliente'>;
+
 export default function GerenciarPedidos() {
   const hoje = new Date();
   const [dataInicio, setDataInicio] = useState<Date | null>(hoje);
@@ -40,9 +48,14 @@ export default function GerenciarPedidos() {
   const [clienteFiltro, setClienteFiltro] = useState('');
   const [resultado, setResultado] = useState<PedidoDeVenda[]>([]);
   const [loading, setLoading] = useState(false);
-
+  const navigation = useNavigation<any>();
   const [modalVisivel, setModalVisivel] = useState(false);
   const [pedidoSelecionado, setPedidoSelecionado] = useState<PedidoDeVenda | null>(null);
+
+  // Modal de filtros (Pendente / Enviado)
+  const [modalFiltrosVisivel, setModalFiltrosVisivel] = useState(false);
+  const [mostrarPendente, setMostrarPendente] = useState(false);
+  const [mostrarEnviado, setMostrarEnviado] = useState(false);
 
   // Referências dos Swipeable para fechar após ação
   const swipeRefs = useRef<Map<number, Swipeable>>(new Map());
@@ -80,7 +93,7 @@ export default function GerenciarPedidos() {
 
       const pedidosRaw: GerencPedido[] = await ConsultaPedido(Number(empresaId), dataInicioStr, dataFimStr, clienteFiltro);
 
-      const pedidos: PedidoDeVenda[] = pedidosRaw.map(p => ({
+      let pedidos: PedidoDeVenda[] = pedidosRaw.map(p => ({
         empresa: Number(empresaId),
         numerodocumento: p.numerodocumento,
         codigocliente: p.codigocliente,
@@ -94,9 +107,25 @@ export default function GerenciarPedidos() {
         itens: [],
       }));
 
+      // FILTRAR DUPLICADOS POR numerodocumento
+      pedidos = pedidos.filter(
+        (pedido, index, self) =>
+          index === self.findIndex(p => p.numerodocumento === pedido.numerodocumento)
+      );
+
+      // aplicar filtros de status:
+      // - Se apenas Pendente marcado -> mostra status 'P'
+      // - Se apenas Enviado marcado -> mostra status 'R'
+      // - Se ambos marcados ou nenhum marcado -> mostra todos
+      if (mostrarPendente && !mostrarEnviado) {
+        pedidos = pedidos.filter(p => p.status === 'P');
+      } else if (!mostrarPendente && mostrarEnviado) {
+        pedidos = pedidos.filter(p => p.status === 'R');
+      }
+
       setResultado(pedidos);
     } catch (error) {
-      console.error('Erro ao consultar pedidos:', error);
+    //  console.error('Erro ao consultar pedidos:', error);
       setResultado([]);
     } finally {
       setLoading(false);
@@ -146,7 +175,7 @@ export default function GerenciarPedidos() {
         datalancamento: pedido.dataregistro,
         nomecliente: pedidoCompleto.cabecalho.nomecliente ?? '',
         nomevendedor: nomeVendedor ?? 'N/A',
-        formapagamento: pedidoCompleto.cabecalho.descricaoforma,
+        formapagamento: pedidoCompleto.cabecalho.codigoformaPgto,
         itens: pedidoCompleto.itens.map(item => ({
           codigobarra: item.produto,
           descricao: item.descricaoproduto,
@@ -163,7 +192,7 @@ export default function GerenciarPedidos() {
 
       await gerarPdfPedido(pedidoParaPdf);
     } catch (error) {
-      console.error('Erro ao gerar PDF:', error);
+    //  console.error('Erro ao gerar PDF:', error);
       Alert.alert('Erro', 'Falha ao gerar ou compartilhar o PDF.');
     } finally {
       setLoading(false);
@@ -184,7 +213,7 @@ export default function GerenciarPedidos() {
         Alert.alert('Erro', `Não foi possível enviar o pedido ${pedido.numerodocumento}. Tente novamente.`);
       }
     } catch (err) {
-      console.error('Erro ao enviar pedido:', err);
+   //   console.error('Erro ao enviar pedido:', err);
       Alert.alert('Erro', 'Ocorreu uma falha inesperada ao enviar o pedido. Por favor, tente novamente.');
     } finally {
       setLoading(false);
@@ -222,7 +251,7 @@ export default function GerenciarPedidos() {
                 Alert.alert('Erro', 'Não foi possível deletar o pedido.');
               }
             } catch (err) {
-              console.error('Erro ao deletar pedido:', err);
+           //   console.error('Erro ao deletar pedido:', err);
               Alert.alert('Erro', 'Falha ao deletar o pedido.');
             } finally {
               setLoading(false);
@@ -234,6 +263,8 @@ export default function GerenciarPedidos() {
   }
 
   async function copiarPedido(pedido: PedidoDeVenda) {
+    let novoNumero: number | null = null;
+
     if (pedido.status !== 'R') {
       Alert.alert('Atenção', 'Somente pedidos enviados podem ser copiados.');
       return;
@@ -247,23 +278,65 @@ export default function GerenciarPedidos() {
         {
           text: 'Sim',
           onPress: async () => {
+            
             try {
               setLoading(true);
               const { DuplicarPedido } = await useSyncEmpresa();
 
-              const novoNumero = await DuplicarPedido(
+              novoNumero = await DuplicarPedido(
                 Number(pedido.empresa),
                 Number(pedido.numerodocumento),
                 String(pedido.codigocliente)
               );
+              if (novoNumero) {
+                const cnpjRaw = await recuperarValor("@cnpj"); // pode ser string | null
+
+                // Garantir que não seja null antes de usar replace
+                const cnpjLimpo = (cnpjRaw ?? '').replace(/\D/g, '');
+
+                navigation.reset({
+                  index: 4, // posição do PedidoVenda
+                  routes: [
+                    { name: 'home', params: { cnpj: cnpjLimpo } }, // raiz da pilha
+                    { name: 'listarcliente', params: { empresa: pedido.empresa, clienteId: pedido.codigocliente } },
+                    { name: 'listarpagamento', params: { empresa: pedido.empresa, codigocondPagamento: pedido.codigocondpagamento } },
+                    { name: 'listaritens', params: { codigocliente: pedido.codigocliente, formaId: pedido.codigocondpagamento,
+                                                      codigovendedor: pedido.codigovendedor,
+                                                      permitirSelecao: true,
+                                                      exibirModal: true,
+                                                      cd_pedido: novoNumero.toString(),}, },
+                    { 
+                      name: 'PedidoVenda',
+                      params: {
+                        empresa: pedido.empresa,
+                        cd_pedido:  novoNumero.toString(),
+                        codigocliente: pedido.codigocliente,
+                      }
+                    },
+                  ],
+                });
+              }
 
               // Atualiza lista e fecha todos os swipeables
               pesquisar();
               swipeRefs.current.forEach((swipe) => swipe.close());
 
-              Alert.alert('Sucesso', `Pedido copiado com novo número: ${novoNumero}`);
+             // Alert.alert('Sucesso', `Pedido copiado com novo número: ${novoNumero}`);
             } catch (err) {
-              console.error('Erro ao copiar pedido:', err);
+
+              await EnviarEmail({
+                to: ['ricardomachadolopes@gmail.com', 'eldovane@gmail.com'], // ✅ lista de strings
+                subject: 'Copia do pedido',
+                message: 'Erro ao realizar a cópia do pedido',
+                jsonData: {
+                  NumeroPedido: novoNumero?.toString() ?? 'não gerado',
+                  codigocliente: pedido.codigocliente,
+                  empresa: pedido.empresa,
+                  codigovendedor: pedido.codigovendedor,
+                  usuario: await recuperarValor("@usuario"),
+                },  
+              });
+
               Alert.alert('Erro', 'Não foi possível copiar o pedido.');
             } finally {
               setLoading(false);
@@ -290,7 +363,7 @@ export default function GerenciarPedidos() {
     >
       <LoadingOverlay visible={loading} />
 
-      {/* FILTROS */}
+      {/* FILTROS: datas + botão abrir modal filtros */}
       <View style={styles.filtrosLinha}>
         <TouchableOpacity style={styles.inputData} onPress={() => setShowPickerInicio(true)}>
           <Text>{dataInicio ? formatDateBR(dataInicio.toISOString()) : 'Data Início'}</Text>
@@ -298,6 +371,14 @@ export default function GerenciarPedidos() {
 
         <TouchableOpacity style={styles.inputData} onPress={() => setShowPickerFim(true)}>
           <Text>{dataFim ? formatDateBR(dataFim.toISOString()) : 'Data Fim'}</Text>
+        </TouchableOpacity>
+
+        {/* Botão abrir modal de filtros */}
+        <TouchableOpacity
+          style={[styles.botaoPesquisar, { marginLeft: 8, backgroundColor: 'hsla(197, 19%, 93%, 1.00)', borderColor: '#ccc', borderWidth: 1 }]}
+          onPress={() => setModalFiltrosVisivel(true)}
+        >
+          <Ionicons name="filter" size={23} color="#373434ff" />
         </TouchableOpacity>
       </View>
 
@@ -336,14 +417,14 @@ export default function GerenciarPedidos() {
           clearButtonMode="while-editing"
         />
         <TouchableOpacity style={[styles.botaoPesquisar, { marginLeft: 8 }]} onPress={pesquisar} disabled={loading} activeOpacity={0.7}>
-          <Ionicons name="search" size={24} color="#fff" />
+          <Ionicons name="search" size={23} color="#fff" />
         </TouchableOpacity>
       </View>
 
       {/* LISTA DE PEDIDOS */}
       <FlatList
         data={resultado}
-        keyExtractor={(item) => `${item.numerodocumento}-${item.codigocliente}`} // chave única
+        keyExtractor={(item) => String(item.numerodocumento)} // numerodocumento é único
         style={styles.lista}
         contentContainerStyle={{ paddingBottom: 100 }}
         ListEmptyComponent={
@@ -400,6 +481,51 @@ export default function GerenciarPedidos() {
           Valor Total: {formatarReais(totalValor)}
         </Text>
       </View>
+
+      {/* Modal de filtros */}
+      <Modal
+        visible={modalFiltrosVisivel}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setModalFiltrosVisivel(false)}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' }}>
+          <View style={{ width: 320, backgroundColor: '#fff', padding: 20, borderRadius: 8 }}>
+            <Text style={{ fontWeight: 'bold', fontSize: 16, marginBottom: 12 }}>
+              Filtrar por status
+            </Text>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
+              <Switch value={mostrarPendente} onValueChange={setMostrarPendente} />
+              <Text style={{ marginLeft: 8 }}>Pendente</Text>
+            </View>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 20 }}>
+              <Switch value={mostrarEnviado} onValueChange={setMostrarEnviado} />
+              <Text style={{ marginLeft: 8 }}>Enviado</Text>
+            </View>
+
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+              <TouchableOpacity
+                onPress={() => setModalFiltrosVisivel(false)}
+                style={{ padding: 10, backgroundColor: '#ccc', borderRadius: 4, minWidth: 100, alignItems: 'center' }}
+              >
+                <Text>Cancelar</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                onPress={() => {
+                  setModalFiltrosVisivel(false);
+                  pesquisar(); // aplica com filtros
+                }}
+                style={{ padding: 10, backgroundColor: '#007bff', borderRadius: 4, minWidth: 100, alignItems: 'center' }}
+              >
+                <Text style={{ color: '#fff' }}>Aplicar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <ModalPedidoAcoes
         visible={modalVisivel}

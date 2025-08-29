@@ -34,6 +34,7 @@ const ModalEditarItem: React.FC<ModalEditarItemProps> = ({
   const [processando, setProcessando] = useState(false); // novo estado de processamento
 
   useEffect(() => {
+    console.log("Qual o numero:", numerodocumento);
     setQuantidadeInput(formatQuantidadeParaInput(quantidadeInicial));
   }, [quantidadeInicial, casasdecimais]);
 

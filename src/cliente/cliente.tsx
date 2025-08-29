@@ -102,7 +102,7 @@ export default function ListarClientes({ route }: ListarClientesProps) {
               disabled={!selecionarHabilitado}
               onPress={() => selecionarCliente(item.codigo, item.nome)}
             >
-              <View style={[styles.card, !selecionarHabilitado && { opacity: 0.5 }]}>
+              <View style={[styles.card, !selecionarHabilitado && { opacity: .7 }]}>
                 <Text style={styles.nome}>{item.nome}</Text>
                 <View style={styles.separador} />
                 <View style={styles.infoRow}>

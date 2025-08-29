@@ -5,8 +5,12 @@ import {ParametrosSistema} from '../config/configs'
 import { criarPastaImagens, getArquivoLocalMtime, setArquivoLocalMtime } from '../scripts/criarpasta';
 import { baixarImagem } from '../scripts/criarpasta';
 import DatabaseManager from '../database/databasemanager';
-import { arredondar, formatarDataRegistro, obterInfoArquivoLocal, sanitizarNumero, tentarRequisicao } from "../scripts/funcoes";
+import { arredondar, contarImagensNoDispositivo, formatarDataRegistro, obterInfoArquivoLocal, sanitizarNumero, tentarRequisicao } from "../scripts/funcoes";
 import { id } from "date-fns/locale";
+import { format, parseISO } from "date-fns";
+import * as FileSystem from 'expo-file-system';
+
+
 
 type ImagemServidor = string;
 
@@ -164,228 +168,234 @@ async function sincronizarProdutos(): Promise<{
   atualizados: number;
   ignorados: number;
   totalProcessados: number;
+  lastSync?: string | null;
 }> {
   await criarPastaImagens();
 
-  console.log('🔍 Iniciando sincronização de PRODUTOS...');
   const database = DatabaseManager.getCurrentDatabase();
+  if (!database) throw new Error("Database não disponível para sincronização de PRODUTO");
 
-  if (!database) {
-    console.log("❌ Banco de dados não disponível em sincronização de PRODUTOS");
-    throw new Error("Database não disponível em sincronização de PRODUTOS");
-  }
+  // 1) last_sync local
+  const lastSyncLocal = await carregarConfig("last_sync_produtos");
+  console.log("⏱ Última sincronização local:", lastSyncLocal ?? "—");
 
-  // Verifica se a tabela existe (opcional)
-  try {
-    const res = await database.getAllAsync<{ name: string }>(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name='cadproduto'"
-    );
-    console.log("🔎 Tabela cadproduto existe:", res.length > 0);
-  } catch (err) {
-    console.error("❌ Erro ao verificar tabela cadproduto:", err);
-  }
+  // 2) chamada API
+  const url = lastSyncLocal ? `produtos?last_sync=${encodeURIComponent(lastSyncLocal)}` : "produtos";
+  const response = await tentarRequisicao(() => api.get(url), 3, 1500);
+  const dados = response.data;
+  const produtosRemotos: ProdutoAPI[] = Array.isArray(dados?.produtos)
+    ? dados.produtos
+    : Array.isArray(dados) ? dados : [];
+  const lastSyncServerRaw: string | null = dados?.last_sync ?? null;
 
-  let produtos: ProdutoAPI[] = [];
+  // Formata para YYYY-MM-DDTHH:mm:ss
+  const lastSyncServer = lastSyncServerRaw
+    ? format(parseISO(lastSyncServerRaw), "yyyy-MM-dd HH:mm:ss")
+    : null;
 
-  // Buscar dados da API com retry
-  try {
-    const response = await tentarRequisicao(() => api.get<ProdutoAPI[]>('produtos'), 3, 1500);
-    const dados = response.data;
-    produtos = Array.isArray(dados) ? dados : [dados];
-  } catch (error: any) {
-    console.log('❌ Erro ao buscar produtos após 3 tentativas:', error.message);
-    throw error;
-  }
 
+
+
+  console.log("⏱ last_sync recebido do servidor:", lastSyncServer);
+
+
+  console.log("🌐 Produtos recebidos da API:", produtosRemotos.length ?? 0);
+
+  // 3) buscar locais
+  const locais = await database.getAllAsync<ProdutoLocal>("SELECT * FROM cadproduto");
+  const mapaLocais = new Map(locais.map(p => [`${p.empresa}-${p.codigo}`, p]));
+
+  // contadores
   let totalInseridos = 0;
   let totalAtualizados = 0;
   let totalIgnorados = 0;
 
-  // Busca produtos locais para comparar
-  const produtosLocais = await database.getAllAsync<ProdutoLocal>('SELECT * FROM cadproduto');
-  const mapaProdutosLocais = new Map(
-    produtosLocais.map(p => [`${p.empresa}-${p.codigo}`, p])
-  );
+  // helpers (sem undefined)
+  const sanitizarNumero = (valor: any, fallback = 0): number => {
+    const n = Number(valor);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const formatarDataRegistro = (valor?: string): string => {
+    if (!valor) return "";
+    const d = new Date(valor);
+    return isNaN(d.getTime()) ? "" : d.toISOString();
+  };
 
-  try {
-    await database.withTransactionAsync(async () => {
-      for (const prodRaw of produtos) {
-        try {
-          // Normaliza dados da API para o formato local
-          const produto: ProdutoLocal = {
-            empresa: prodRaw.empresa,
-            codigo: prodRaw.codigo,
-            descricao: prodRaw.descricao ?? '',
-            unidadeMedida: prodRaw.unidadeMedida ?? prodRaw.unidademedida ?? '',
-            codigobarra: prodRaw.codigoBarra ?? prodRaw.codigobarra ?? '',
-            agrupamento: prodRaw.agrupamento ?? '',
-            marca: prodRaw.marca ?? '',
-            modelo: prodRaw.modelo ?? '',
-            tamanho: prodRaw.tamanho ?? '',
-            cor: prodRaw.cor ?? '',
-            peso: sanitizarNumero(prodRaw.peso),
-            precovenda: sanitizarNumero(prodRaw.precoVenda ?? prodRaw.precovenda),
-            casasdecimais: String(prodRaw.casasdecimais ?? '0'),
-            percentualdesconto: sanitizarNumero(prodRaw.percentualDesconto ?? prodRaw.percentualdesconto),
-            estoque: sanitizarNumero(prodRaw.estoque),
-            reajustacondicaopagamento: prodRaw.reajustaCondicaoPagamento ?? prodRaw.reajustacondicaopagamento ?? '',
-            percentualComissao: sanitizarNumero(prodRaw.percentualComissao ?? prodRaw.percentualcomissao),
-            situacaoregistro: prodRaw.situacaoRegistro ?? prodRaw.situacaoregistro ?? '',
-            dataregistro: formatarDataRegistro(prodRaw.dataRegistro ?? prodRaw.dataregistro ?? ''),
-            versao: sanitizarNumero(prodRaw.versao),
-            imagens: sanitizarNumero(prodRaw.imagens),
-          };
+  // 4) se API não retornou nada => conta como ignorados os locais (mesmo padrão do vendedor)
+  if (!produtosRemotos || produtosRemotos.length === 0) {
+    totalIgnorados = locais.length;
+    if (lastSyncServer) await salvarConfig("last_sync_produtos", lastSyncServer);
 
-          const chave = `${produto.empresa}-${produto.codigo}`;
-          const registroAtual = mapaProdutosLocais.get(chave);
-
-          function dadosDiferentes(prodNovo: ProdutoLocal, prodAtual: ProdutoLocal | undefined) {
-            if (!prodAtual) return true; // não existe, é diferente
-            const campos = [
-              'descricao', 'unidadeMedida', 'codigobarra', 'agrupamento',
-              'marca', 'modelo', 'tamanho', 'cor', 'peso', 'precovenda',
-              'casasdecimais', 'percentualdesconto', 'estoque', 'reajustacondicaopagamento',
-              'percentualComissao', 'situacaoregistro', 'dataregistro', 'versao', 'imagens'
-            ];
-
-            const camposNumericos = [
-              'peso', 'precovenda', 'percentualdesconto', 'estoque', 'percentualComissao', 'imagens'
-            ];
-
-            return campos.some(campo => {
-              const valNovo = (prodNovo as any)[campo] ?? '';
-              const valAtual = (prodAtual as any)[campo] ?? '';
-
-              if (camposNumericos.includes(campo)) {
-                const numNovo = Number(valNovo);
-                const numAtual = Number(valAtual);
-                if (isNaN(numNovo) && isNaN(numAtual)) return false;
-                if (numNovo !== numAtual) {
-                  console.log(`Campo NUM ${campo} mudou: ${numAtual} -> ${numNovo}`);
-                  return true;
-                }
-                return false;
-              }
-
-              if (campo === 'dataregistro') {
-                if (valNovo !== valAtual) {
-                  console.log(`Campo DATA ${campo} mudou: ${valAtual} -> ${valNovo}`);
-                  return true;
-                }
-                return false;
-              }
-
-              if (valNovo.toString().trim() !== valAtual.toString().trim()) {
-                console.log(`Campo STR ${campo} mudou: "${valAtual}" -> "${valNovo}"`);
-                return true;
-              }
-
-              return false;
-            });
-          }
-
-          if (!registroAtual) {
-            // Inserir novo produto
-            await database.runAsync(
-              `INSERT INTO cadproduto (
-                empresa, codigo, descricao, unidadeMedida, codigobarra,
-                agrupamento, marca, modelo, tamanho, cor, peso, precovenda,
-                casasdecimais, percentualdesconto, estoque, reajustacondicaopagamento,
-                percentualComissao, situacaoregistro, dataregistro,
-                versao, imagens
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                produto.empresa,
-                produto.codigo,
-                produto.descricao,
-                produto.unidadeMedida,
-                produto.codigobarra,
-                produto.agrupamento,
-                produto.marca,
-                produto.modelo,
-                produto.tamanho,
-                produto.cor,
-                produto.peso,
-                produto.precovenda,
-                produto.casasdecimais,
-                produto.percentualdesconto,
-                produto.estoque,
-                produto.reajustacondicaopagamento,
-                produto.percentualComissao,
-                produto.situacaoregistro,
-                produto.dataregistro,
-                produto.versao,
-                produto.imagens
-              ]
-            );
-            console.log(`✅ Produto ${produto.codigo} inserido.`);
-            totalInseridos++;
-
-          } else if (dadosDiferentes(produto, registroAtual)) {
-            // Atualizar produto existente
-            await database.runAsync(
-              `UPDATE cadproduto SET
-                descricao = ?, unidadeMedida = ?, codigobarra = ?, agrupamento = ?,
-                marca = ?, modelo = ?, tamanho = ?, cor = ?, peso = ?, precovenda = ?,
-                casasdecimais = ?, percentualdesconto = ?, estoque = ?, reajustacondicaopagamento = ?,
-                percentualComissao = ?, situacaoregistro = ?, dataregistro = ?,
-                versao = ?, imagens = ?
-              WHERE empresa = ? AND codigo = ?`,
-              [
-                produto.descricao,
-                produto.unidadeMedida,
-                produto.codigobarra,
-                produto.agrupamento,
-                produto.marca,
-                produto.modelo,
-                produto.tamanho,
-                produto.cor,
-                produto.peso,
-                produto.precovenda,
-                produto.casasdecimais,
-                produto.percentualdesconto,
-                produto.estoque,
-                produto.reajustacondicaopagamento,
-                produto.percentualComissao,
-                produto.situacaoregistro,
-                produto.dataregistro,
-                produto.versao,
-                produto.imagens,
-                produto.empresa,
-                produto.codigo
-              ]
-            );
-            console.log(`🔄 Produto ${produto.codigo} atualizado.`);
-            totalAtualizados++;
-
-          } else {
-            console.log(`⏭ Produto ${produto.codigo} sem alteração.`);
-            totalIgnorados++;
-          }
-        } catch (err) {
-          console.error(`❌ Erro ao sincronizar produto ${prodRaw.codigo}:`, err);
-        }
-      }
-    });
-  } catch (error: any) {
-    console.error('❌ Erro geral ao sincronizar produtos:', error.message);
-    throw new Error('Falha na sincronização dos produtos');
+    const totalProcessados = 0; // nenhum remoto para processar
+    console.log(`🏁 Produtos: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
+    return {
+      inseridos: totalInseridos,
+      atualizados: totalAtualizados,
+      ignorados: totalIgnorados,
+      totalProcessados,
+      lastSync: lastSyncServer
+    };
   }
 
-  console.log(`🏁 Sincronização finalizada:`);
-  console.log(`✅ Inseridos: ${totalInseridos}`);
-  console.log(`🔄 Atualizados: ${totalAtualizados}`);
-  console.log(`⏭ Ignorados: ${totalIgnorados}`);
-  console.log(`📦 Total processados: ${produtos.length}`);
+  // 5) filtrar válidos (empresa+codigo); os inválidos entram como ignorados
+  const produtosValidos = produtosRemotos.filter(p => p.empresa != null && p.codigo != null);
+  const descartadosChave = produtosRemotos.length - produtosValidos.length;
+  if (descartadosChave > 0) {
+    console.warn(`⚠️ Itens descartados por falta de chave (empresa/codigo): ${descartadosChave}`);
+    totalIgnorados += descartadosChave;
+  }
+
+  // 6) diferença de dados
+  const dadosDiferentes = (novo: ProdutoLocal, atual?: ProdutoLocal) => {
+    if (!atual) return true;
+
+    const camposNumericos: (keyof ProdutoLocal)[] = [
+      "peso", "precovenda", "percentualdesconto", "estoque", "percentualComissao", "versao", "imagens"
+    ];
+    const camposTexto: (keyof ProdutoLocal)[] = [
+      "descricao", "unidadeMedida", "codigobarra", "agrupamento",
+      "marca", "modelo", "tamanho", "cor", "casasdecimais",
+      "reajustacondicaopagamento", "situacaoregistro", "dataregistro"
+    ];
+
+    for (const c of camposNumericos) {
+      const a = sanitizarNumero((atual as any)[c]);
+      const b = sanitizarNumero((novo as any)[c]);
+      if (a !== b) return true;
+    }
+    for (const c of camposTexto) {
+      const a = String((atual as any)[c] ?? "").trim();
+      const b = String((novo as any)[c] ?? "").trim();
+      if (a !== b) return true;
+    }
+    return false;
+  };
+
+  // 7) transação de upsert
+  await database.withTransactionAsync(async () => {
+    for (const r of produtosValidos) {
+      try {
+        const produto: ProdutoLocal = {
+          empresa: r.empresa!,
+          codigo: r.codigo!,
+          descricao: r.descricao ?? "",
+          unidadeMedida: r.unidadeMedida ?? r.unidademedida ?? "",
+          codigobarra: r.codigoBarra ?? r.codigobarra ?? "",
+          agrupamento: r.agrupamento ?? "",
+          marca: r.marca ?? "",
+          modelo: r.modelo ?? "",
+          tamanho: r.tamanho ?? "",
+          cor: r.cor ?? "",
+          peso: sanitizarNumero(r.peso),
+          precovenda: sanitizarNumero(r.precoVenda ?? r.precovenda),
+          casasdecimais: String(r.casasdecimais ?? "0"),
+          percentualdesconto: sanitizarNumero(r.percentualDesconto ?? r.percentualdesconto),
+          estoque: sanitizarNumero(r.estoque),
+          reajustacondicaopagamento: r.reajustaCondicaoPagamento ?? r.reajustacondicaopagamento ?? "",
+          percentualComissao: sanitizarNumero(r.percentualComissao ?? r.percentualcomissao),
+          situacaoregistro: r.situacaoRegistro ?? r.situacaoregistro ?? "",
+          dataregistro: formatarDataRegistro(r.dataRegistro ?? r.dataregistro),
+          versao: sanitizarNumero(r.versao),
+          imagens: sanitizarNumero(r.imagens),
+        };
+
+        const chave = `${produto.empresa}-${produto.codigo}`;
+        const atual = mapaLocais.get(chave);
+
+        if (!atual) {
+          await database.runAsync(
+            `INSERT INTO cadproduto (
+              empresa, codigo, descricao, unidadeMedida, codigobarra,
+              agrupamento, marca, modelo, tamanho, cor, peso, precovenda,
+              casasdecimais, percentualdesconto, estoque, reajustacondicaopagamento,
+              percentualComissao, situacaoregistro, dataregistro, versao, imagens
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              String(produto.empresa),
+              String(produto.codigo),
+              produto.descricao,
+              produto.unidadeMedida,
+              produto.codigobarra,
+              produto.agrupamento,
+              produto.marca,
+              produto.modelo,
+              produto.tamanho,
+              produto.cor,
+              produto.peso,
+              produto.precovenda,
+              produto.casasdecimais,
+              produto.percentualdesconto,
+              produto.estoque,
+              produto.reajustacondicaopagamento,
+              produto.percentualComissao,
+              produto.situacaoregistro,
+              produto.dataregistro,
+              produto.versao,
+              produto.imagens
+            ]
+          );
+          totalInseridos++;
+        } else if (dadosDiferentes(produto, atual)) {
+          await database.runAsync(
+            `UPDATE cadproduto SET
+              descricao = ?, unidadeMedida = ?, codigobarra = ?, agrupamento = ?,
+              marca = ?, modelo = ?, tamanho = ?, cor = ?, peso = ?, precovenda = ?,
+              casasdecimais = ?, percentualdesconto = ?, estoque = ?, reajustacondicaopagamento = ?,
+              percentualComissao = ?, situacaoregistro = ?, dataregistro = ?, versao = ?, imagens = ?
+            WHERE empresa = ? AND codigo = ?`,
+            [
+              produto.descricao,
+              produto.unidadeMedida,
+              produto.codigobarra,
+              produto.agrupamento,
+              produto.marca,
+              produto.modelo,
+              produto.tamanho,
+              produto.cor,
+              produto.peso,
+              produto.precovenda,
+              produto.casasdecimais,
+              produto.percentualdesconto,
+              produto.estoque,
+              produto.reajustacondicaopagamento,
+              produto.percentualComissao,
+              produto.situacaoregistro,
+              produto.dataregistro,
+              produto.versao,
+              produto.imagens,
+              String(produto.empresa),
+              String(produto.codigo)
+            ]
+          );
+          totalAtualizados++;
+        } else {
+          totalIgnorados++;
+        }
+      } catch (err) {
+        console.error(`❌ Erro ao processar produto ${r.codigo}:`, err);
+        totalIgnorados++;
+      }
+    }
+  });
+
+  // 8) persiste last_sync do servidor
+  if (lastSyncServer) {
+    await salvarConfig("last_sync_produtos", lastSyncServer);
+    console.log("⏱ last_sync atualizado para:", lastSyncServer);
+  }
+
+  // 9) totais finais (mesmo padrão do vendedor/cliente)
+  const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
+  console.log(`🏁 Produtos: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
 
   return {
     inseridos: totalInseridos,
     atualizados: totalAtualizados,
     ignorados: totalIgnorados,
-    totalProcessados: produtos.length,
+    totalProcessados,
+    lastSync: lastSyncServer
   };
 }
-
 
 
 
@@ -393,26 +403,54 @@ async function sincronizarProdutos(): Promise<{
 // ***********************Inicio da função de sincronização das imagens **************************
 //------------------------------------------------------------------------------------------------
 
+// Função para processar várias tarefas com limite de concorrência
+async function processarComLimite<T>(tarefas: (() => Promise<T>)[], limite: number): Promise<T[]> {
+  const resultados: T[] = [];
+  const fila = [...tarefas];
+
+  async function executar() {
+    while (fila.length > 0) {
+      const tarefa = fila.shift();
+      if (tarefa) {
+        resultados.push(await tarefa());
+      }
+    }
+  }
+
+  const workers = Array.from({ length: limite }, () => executar());
+  await Promise.all(workers);
+
+  return resultados;
+}
+
+// Função principal de sincronização
 async function sincronizarImagens(): Promise<{ novas: number; atualizadas: number; total: number }> {
   let novas = 0;
   let atualizadas = 0;
 
   try {
-    const response = await api.get<{ imagens: { url: string; mtime: number }[] }>('lista/imagem');
+    // Garante que a pasta de imagens exista
+    const pastaImagens = (FileSystem.documentDirectory as string) + 'imagens';
+    const pastaExiste = await FileSystem.getInfoAsync(pastaImagens);
+    if (!pastaExiste.exists) {
+      await FileSystem.makeDirectoryAsync(pastaImagens, { intermediates: true });
+    }
+
+    // Lista imagens do servidor
+    const response = await api.get<{ imagens: { url: string; mtime: number }[] }>("lista/imagem");
     const arquivos = response.data.imagens;
 
-    for (const arquivo of arquivos) {
-      const nomeArquivo = arquivo.url.split('/').pop();
-      if (!nomeArquivo) continue;
+    // Cria tarefas de download/atualização
+    const tarefas = arquivos.map((arquivo) => async () => {
+      const nomeArquivo = arquivo.url.split("/").pop();
+      if (!nomeArquivo) return null;
 
       const mtimeLocal = await getArquivoLocalMtime(nomeArquivo);
 
       if (!mtimeLocal) {
-        // Imagem nova
         await baixarImagem(arquivo.url, nomeArquivo);
         novas++;
       } else if (mtimeLocal < arquivo.mtime) {
-        // Imagem existente, mas desatualizada
         await baixarImagem(arquivo.url, nomeArquivo);
         atualizadas++;
       }
@@ -420,17 +458,32 @@ async function sincronizarImagens(): Promise<{ novas: number; atualizadas: numbe
       if (!mtimeLocal || mtimeLocal < arquivo.mtime) {
         await setArquivoLocalMtime(nomeArquivo, arquivo.mtime);
       }
+
+      return true;
+    });
+
+    // Executa downloads com limite de 5 simultâneos
+    await processarComLimite(tarefas, 5);
+
+    // Conta **todas** as imagens que existem na pasta local após sincronização
+    let arquivosLocais: string[] = [];
+    try {
+      arquivosLocais = await FileSystem.readDirectoryAsync(pastaImagens);
+    } catch {
+      arquivosLocais = [];
     }
 
-    const total = novas + atualizadas;
+    const total = await contarImagensNoDispositivo();
+
     console.log(`🆕 Novas: ${novas}, 🔄 Atualizadas: ${atualizadas}, 📦 Total: ${total}`);
     return { novas, atualizadas, total };
 
-  } catch (error) {
-    console.error('❌ Erro ao sincronizar imagens:', error);
+  } catch (error: any) {
+    console.error("❌ Erro ao sincronizar imagens:", error);
     return { novas: 0, atualizadas: 0, total: 0 };
   }
 }
+
 
 // ***********************Inicio da função de sincronização das imagens **************************
 //------------------------------------------------------------------------------------------------
@@ -782,401 +835,508 @@ async function sincronizarRotaClientes() {
 // ***********************Inicio da função de sincronização dos cadastros de clientes **************************
 //------------------------------------------------------------------------------------------------
 
+// --- Tipo customizado do seu database com helpers ---
+type SQLiteDatabase = {
+  getAllAsync: <T = any>(sql: string, params?: any[]) => Promise<T[]>;
+  getFirstAsync: <T = any>(sql: string, params?: any[]) => Promise<T | null>;
+  runAsync: (sql: string, params?: any[]) => Promise<void>;
+  withTransactionAsync: (callback: () => Promise<void>) => Promise<void>;
+};
+
+// --- Interface da API de clientes com index signature para acesso dinâmico ---
+interface ClienteAPI {
+  empresa: number;
+  codigo: string;
+  codigovendedor?: string;
+  nome?: string;
+  contato?: string;
+  cpfCnpj?: string;
+  rua?: string;
+  numero?: string;
+  bairro?: string;
+  cidade?: string;
+  estado?: string;
+  telefone?: string;
+  limiteCredito?: number;
+  observacao?: string;
+  restricao?: string;
+  reajuste?: number;
+  situacaoRegistro?: string;
+  dataRegistro?: string;
+  versao?: number;
+
+  [key: string]: any; // <- permite acessar campos dinamicamente
+}
+
+
+
 async function sincronizarClientes() {
-  let clientes: any[] = [];
   const database = DatabaseManager.getCurrentDatabase();
-
-  if (!database) {
-    console.log("❌ Banco de dados ainda não está disponível em sincronização de CLIENTE");
-    throw new Error("Database não disponível em sincronização de CLIENTE");
-  }
+  if (!database) throw new Error("Database não disponível para sincronização de CLIENTE");
 
   try {
-    const res = await database.getAllAsync("SELECT name FROM sqlite_master WHERE type='table' AND name='cadcliente'");
-    console.log("🔎 Tabela cadcliente existe:", res.length > 0);
-  } catch (err) {
-    console.error("❌ Erro ao verificar tabela cadcliente:", err);
-  }
+    // 1️⃣ Recupera última sincronização
+    const lastSyncLocal = await carregarConfig("last_sync_clientes");
+    console.log("⏱ Última sincronização local:", lastSyncLocal ?? "—");
 
-  try {
-    console.log("🔗 URL chamada:", api.defaults.baseURL + 'clientes');
+    // 2️⃣ Chamada API
+    const url = lastSyncLocal ? `clientes?last_sync=${encodeURIComponent(lastSyncLocal)}` : "clientes";
+    console.log("🔗 URL chamada:", api.defaults.baseURL + url);
+    const response = await tentarRequisicao(() => api.get(url), 3, 1500);
+    const dados = response.data;
 
-    // Buscar dados da API com retry
-    const response = await tentarRequisicao(() => api.get('clientes'), 3, 1500);
-    let dados = response.data;
+    const clientesRemotos: ClienteAPI[] = Array.isArray(dados?.clientes)
+      ? dados.clientes
+      : Array.isArray(dados) ? dados : [];
+    const lastSyncServerRaw: string | null = dados?.last_sync ?? null;
 
-    // Parse seguro se vier como string
-    if (typeof dados === 'string') {
-      try {
-        dados = JSON.parse(dados);
-      } catch (err) {
-        console.error('❌ Não foi possível parsear os dados da API:', err);
-        dados = [];
-      }
-    }
+    // Formata lastSyncServer para "YYYY-MM-DD HH:mm:ss"
+    const lastSyncServer: string | null = lastSyncServerRaw
+      ? format(parseISO(lastSyncServerRaw), "yyyy-MM-dd HH:mm:ss")
+      : null;
 
-    clientes = Array.isArray(dados) ? dados : [dados];
-
-    // Filtro clientes inválidos
-    const clientesValidos = clientes.filter(c => {
-      const valido = c?.empresa != null && c?.codigo != null && c?.codigo !== '';
-      if (!valido) console.warn("⚠️ Cliente inválido ignorado:", c);
-      return valido;
-    });
-    clientes = clientesValidos;
-
-    console.log(`📦 Total de clientes válidos: ${clientes.length}`);
-
-  } catch (error: any) {
-    if (error.response) {
-      console.error("❌ Erro de resposta:", error.response.status, error.response.data);
-    } else if (error.request) {
-      console.error("❌ Erro de rede ou servidor inacessível:", error.message);
-    } else {
-      console.error("❌ Erro inesperado:", error.message);
-    }
-    throw error;
-  }
-
-  try {
-    interface Cliente {
-      empresa: number;
-      codigo: string;
-      // Demais campos
-    }
-
-    const locais = await database.getAllAsync<Cliente>('SELECT * FROM cadcliente');
-    const mapaLocais = new Map(
-      locais.map(c => [`${c.empresa}-${c.codigo}`, c])
-    );
+    // 3️⃣ Busca clientes já existentes
+    const locais = await database.getAllAsync<ClienteAPI>("SELECT * FROM cadcliente");
+    const mapaLocais = new Map(locais.map(c => [`${c.empresa}-${c.codigo}`, c]));
 
     let totalInseridos = 0;
     let totalAtualizados = 0;
     let totalIgnorados = 0;
 
-    await database.withTransactionAsync(async () => {
-      for (let cliente of clientes) {
-        try {
-          // Validação obrigatórios
-          if (!cliente?.empresa || !cliente?.codigo) {
-            console.warn(`⚠️ Cliente inválido, ignorando:`, cliente);
-            totalIgnorados++;
-            continue;
-          }
+    // 4️⃣ Se API não retornou nada, ignora todos locais
+    if (!clientesRemotos || clientesRemotos.length === 0) {
+      totalIgnorados = locais.length;
+      if (lastSyncServer) await salvarConfig("last_sync_clientes", lastSyncServer);
 
-          const chave = `${cliente.empresa}-${cliente.codigo}`;
+      const totalProcessados = 0;
+      console.log(`🏁 Clientes: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
+      return {
+        inseridos: totalInseridos,
+        atualizados: totalAtualizados,
+        ignorados: totalIgnorados,
+        totalProcessados,
+        lastSync: lastSyncServer
+      };
+    }
+
+    // 5️⃣ Filtra clientes válidos
+    const clientesValidos = clientesRemotos.filter(c => c.empresa != null && c.codigo != null);
+    const descartadosChave = clientesRemotos.length - clientesValidos.length;
+    if (descartadosChave > 0) {
+      console.warn(`⚠️ Clientes descartados por falta de chave (empresa/codigo): ${descartadosChave}`);
+      totalIgnorados += descartadosChave;
+    }
+
+    // 6️⃣ Atualiza banco local
+    await database.withTransactionAsync(async () => {
+      for (const c of clientesValidos) {
+        try {
+          const chave = `${c.empresa}-${c.codigo}`;
           const atual = mapaLocais.get(chave);
 
-          function dadosDiferentes(novo: any, atual: any) {
+          const dadosDiferentes = (novo: ClienteAPI, atual?: ClienteAPI) => {
+            if (!atual) return true;
             const campos = [
-              'codigovendedor', 'nome', 'contato', 'cpfCnpj', 'rua', 'numero',
-              'bairro', 'cidade', 'estado', 'telefone', 'limiteCredito',
-              'observacao', 'restricao', 'reajuste', 'situacaoRegistro',
-              'dataRegistro', 'versao'
+              'codigovendedor','nome','contato','cpfCnpj','rua','numero',
+              'bairro','cidade','estado','telefone','limiteCredito',
+              'observacao','restricao','reajuste','situacaoRegistro',
+              'dataRegistro','versao'
             ];
-            return campos.some(campo => {
-              const novoVal = novo[campo] ?? '';
-              const atualVal = atual?.[campo] ?? '';
-              return novoVal.toString().trim() !== atualVal.toString().trim();
-            });
-          }
+            return campos.some(f => String(novo[f] ?? '').trim() !== String(atual[f] ?? '').trim());
+          };
 
           if (!atual) {
             await database.runAsync(
               `INSERT INTO cadcliente (
-                empresa, codigo, codigovendedor, nome, contato, cpfCnpj, rua,
-                numero, bairro, cidade, estado, telefone, limiteCredito,
-                observacao, restricao, reajuste, situacaoRegistro, dataRegistro, versao
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                empresa,codigo,codigovendedor,nome,contato,cpfCnpj,rua,
+                numero,bairro,cidade,estado,telefone,limiteCredito,
+                observacao,restricao,reajuste,situacaoRegistro,dataRegistro,versao
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
               [
-                sanitizarNumero(cliente.empresa), cliente.codigo,
-                cliente.codigovendedor ? sanitizarNumero(cliente.codigovendedor) : 0,
-                cliente.nome ?? '', cliente.contato ?? '', cliente.cpfCnpj ?? '', cliente.rua ?? '',
-                cliente.numero ?? '', cliente.bairro ?? '', cliente.cidade ?? '',
-                cliente.estado ?? '', cliente.telefone ?? '', sanitizarNumero(cliente.limiteCredito),
-                cliente.observacao ?? '', cliente.restricao ?? '', sanitizarNumero(cliente.reajuste),
-                cliente.situacaoRegistro ?? 'I', cliente.dataRegistro ?? '', sanitizarNumero(cliente.versao, 1)
+                String(c.empresa),
+                String(c.codigo ?? ''),
+                c.codigovendedor != null ? String(c.codigovendedor).padStart(5, "0") : '',
+                c.nome ?? '',
+                c.contato ?? '',
+                c.cpfCnpj ?? '',
+                c.rua ?? '',
+                c.numero ?? '',
+                c.bairro ?? '',
+                c.cidade ?? '',
+                c.estado ?? '',
+                c.telefone ?? '',
+                Number(c.limiteCredito ?? 0),
+                c.observacao ?? '',
+                c.restricao ?? '',
+                Number(c.reajuste ?? 0),
+                c.situacaoRegistro ?? 'I',
+                c.dataRegistro ? format(parseISO(c.dataRegistro), "yyyy-MM-dd HH:mm:ss") : '',
+                Number(c.versao ?? 1)
               ]
             );
-            console.log(`✅ Cliente ${cliente.codigo} inserido.`);
             totalInseridos++;
-          } else if (dadosDiferentes(cliente, atual)) {
+          } else if (dadosDiferentes(c, atual)) {
             await database.runAsync(
               `UPDATE cadcliente SET
-                codigovendedor = ?, nome = ?, contato = ?, cpfCnpj = ?, rua = ?,
-                numero = ?, bairro = ?, cidade = ?, estado = ?, telefone = ?,
-                limiteCredito = ?, observacao = ?, restricao = ?, reajuste = ?,
-                situacaoRegistro = ?, dataRegistro = ?, versao = ?
-              WHERE empresa = ? AND codigo = ?`,
+                codigovendedor=?, nome=?, contato=?, cpfCnpj=?, rua=?,
+                numero=?, bairro=?, cidade=?, estado=?, telefone=?,
+                limiteCredito=?, observacao=?, restricao=?, reajuste=?,
+                situacaoRegistro=?, dataRegistro=?, versao=?
+              WHERE empresa=? AND codigo=?`,
               [
-                cliente.codigovendedor ? sanitizarNumero(cliente.codigovendedor) : 0,
-                cliente.nome ?? '', cliente.contato ?? '', cliente.cpfCnpj ?? '', cliente.rua ?? '', cliente.numero ?? '',
-                cliente.bairro ?? '', cliente.cidade ?? '', cliente.estado ?? '', cliente.telefone ?? '',
-                sanitizarNumero(cliente.limiteCredito), cliente.observacao ?? '', cliente.restricao ?? '',
-                sanitizarNumero(cliente.reajuste), cliente.situacaoRegistro ?? 'I', cliente.dataRegistro ?? '',
-                sanitizarNumero(cliente.versao, 1), sanitizarNumero(cliente.empresa), cliente.codigo
+                c.codigovendedor != null ? String(c.codigovendedor).padStart(5, "0") : '',
+                c.nome ?? '',
+                c.contato ?? '',
+                c.cpfCnpj ?? '',
+                c.rua ?? '',
+                c.numero ?? '',
+                c.bairro ?? '',
+                c.cidade ?? '',
+                c.estado ?? '',
+                c.telefone ?? '',
+                Number(c.limiteCredito ?? 0),
+                c.observacao ?? '',
+                c.restricao ?? '',
+                Number(c.reajuste ?? 0),
+                c.situacaoRegistro ?? 'I',
+                c.dataRegistro ? format(parseISO(c.dataRegistro), "yyyy-MM-dd HH:mm:ss") : '',
+                Number(c.versao ?? 1),
+                String(c.empresa),
+                String(c.codigo)
               ]
             );
-            console.log(`🔄 Cliente ${cliente.codigo} atualizado.`);
             totalAtualizados++;
           } else {
-            console.log(`⏭ Cliente ${cliente.codigo} sem alteração.`);
             totalIgnorados++;
           }
 
         } catch (err) {
-          console.error(`❌ Erro ao processar cliente ${cliente.codigo}:`, err);
+          console.error(`❌ Erro ao processar cliente ${c.codigo}:`, err);
           totalIgnorados++;
         }
       }
     });
 
-    console.log(`🏁 Sincronização de CLIENTE finalizada:`);
-    console.log(`✅ Inseridos: ${totalInseridos}`);
-    console.log(`🔄 Atualizados: ${totalAtualizados}`);
-    console.log(`⏭ Ignorados: ${totalIgnorados}`);
-    console.log(`📦 Total processados: ${clientes.length}`);
+    // 7️⃣ Atualiza last_sync
+    if (lastSyncServer) await salvarConfig("last_sync_clientes", lastSyncServer);
+    console.log("⏱ last_sync atualizado para:", lastSyncServer);
+
+    const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
+    console.log(`🏁 Clientes: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
 
     return {
       inseridos: totalInseridos,
       atualizados: totalAtualizados,
       ignorados: totalIgnorados,
-      totalProcessados: clientes.length,
+      totalProcessados,
+      lastSync: lastSyncServer
     };
 
   } catch (error: any) {
-    console.error('❌ Erro geral ao sincronizar clientes:', error.message);
-    throw new Error('Falha na sincronização de CLIENTES');
+    console.error("❌ Erro geral ao sincronizar clientes:", error.message);
+    throw new Error("Falha na sincronização de CLIENTES");
   }
 }
+
+
+
+
 
 
 
 // ***********************Inicio da função de sincronização dos cadastros de vendedores **************************
 //----------------------------------------------------------------------------------------------------------------
-async function sincronizarVendedores() {
-  let vendedores: any[] = [];
-  const database = DatabaseManager.getCurrentDatabase();
-
-  if (!database) {
-    console.log("❌ Banco de dados ainda não está disponível em sincronização de VENDEDORES");
-    throw new Error("Database não disponível em sincronização de VENDEDORES");
-  }
-
-  try {  
-    const response = await tentarRequisicao(() => api.get('vendedores'), 3, 1500);
-    const dados = response.data;
-    vendedores = Array.isArray(dados) ? dados : [dados];
-  } catch (error: any) {
-    console.log('❌ Erro ao buscar vendedores após 3 tentativas:', error.message);
-    throw error;
-  }  
-
-  try {
-    interface Vendedor {
-      empresa: number;
-      codigo: string;
-      codigorota?: number | null;
-      nome: string;
-      situacaoRegistro?: string;
-      dataRegistro?: string;
-      versao: number;
-    }
-
-    const locais = await database.getAllAsync<Vendedor>('SELECT * FROM cadvendedor');
-    const mapaLocais = new Map(
-      locais.map(v => [`${v.empresa}-${v.codigo}`, v])
-    );
-
-    let totalInseridos = 0;
-    let totalAtualizados = 0;
-    let totalIgnorados = 0;
-
-    await database.withTransactionAsync(async () => {
-      for (let vendedor of vendedores) {
-        try {
-          const chave = `${vendedor.empresa}-${vendedor.codigo}`;
-          const atual = mapaLocais.get(chave);
-
-          function dadosDiferentes(novo: any, atual: any) {
-            const campos = ['codigorota', 'nome', 'situacaoRegistro', 'dataRegistro', 'versao'];
-            return campos.some(campo => {
-              const novoVal = novo[campo] ?? '';
-              const atualVal = atual?.[campo] ?? '';
-              return novoVal.toString().trim() !== atualVal.toString().trim();
-            });
-          }
-
-          if (!atual) {
-            await database.runAsync(
-              `INSERT INTO cadvendedor (
-                empresa, codigo, codigorota, nome, situacaoRegistro, dataRegistro, versao
-              ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [
-                vendedor.empresa,
-                vendedor.codigo,
-                vendedor.codigorota ?? null,
-                vendedor.nome,
-                vendedor.situacaoRegistro ?? 'I',
-                vendedor.dataRegistro ?? '',
-                vendedor.versao ?? 1
-              ]
-            );
-            console.log(`✅ Vendedor ${vendedor.codigo} inserido.`);
-            totalInseridos++;
-          } else if (dadosDiferentes(vendedor, atual)) {
-            await database.runAsync(
-              `UPDATE cadvendedor SET
-                codigorota = ?, nome = ?, situacaoRegistro = ?, dataRegistro = ?, versao = ?
-              WHERE empresa = ? AND codigo = ?`,
-              [
-                vendedor.codigorota ?? null,
-                vendedor.nome,
-                vendedor.situacaoRegistro ?? 'I',
-                vendedor.dataRegistro ?? '',
-                vendedor.versao ?? 1,
-                vendedor.empresa,
-                vendedor.codigo
-              ]
-            );
-            console.log(`🔄 Vendedor ${vendedor.codigo} atualizado.`);
-            totalAtualizados++;
-          } else {
-            console.log(`⏭ Vendedor ${vendedor.codigo} sem alteração.`);
-            totalIgnorados++;
-          }
-
-        } catch (err) {
-          console.error(`❌ Erro ao processar vendedor ${vendedor.codigo}:`, err);
-        }
-      }
-    });
-
-    console.log(`🏁 Sincronização de vendedores finalizada:`);
-    console.log(`✅ Inseridos: ${totalInseridos}`);
-    console.log(`🔄 Atualizados: ${totalAtualizados}`);
-    console.log(`⏭ Ignorados: ${totalIgnorados}`);
-    console.log(`📦 Total processados: ${vendedores.length}`);
-
-    return {
-      inseridos: totalInseridos,
-      atualizados: totalAtualizados,
-      ignorados: totalIgnorados,
-      totalProcessados: vendedores.length,
-    };
-
-  } catch (error: any) {
-    console.error('❌ Erro geral ao sincronizar vendedores:', error.message);
-    throw new Error('Falha na sincronização de vendedores');
-  }
+interface VendedorLocal {
+  empresa: number;
+  codigo: string;
+  codigorota: number | null;
+  nome: string;
+  situacaoRegistro: string;
+  dataRegistro: string;
+  versao: number;
 }
 
 
-// ***********************Inicio da função de sincronização forma de pagamento **************************
-//-------------------------------------------------------------------------------------------------------
-async function sincronizarCondicoesPagamento() {
-  let condicoes: any[] = [];
+
+async function sincronizarVendedores(last_sync?: string) {
+  const database = DatabaseManager.getCurrentDatabase();
+  if (!database) throw new Error("Database não disponível em sincronização de VENDEDORES");
+
+  // Converte last_sync em Date
+  let filtroData: Date | null = null;
+  if (last_sync) {
+    filtroData = parseISO(last_sync);
+    if (isNaN(filtroData.getTime())) {
+      throw new Error("Formato inválido de last_sync. Use ISO 8601");
+    }
+  }
+
+  // Buscar vendedores da API
+  let vendedores: any[] = [];
+  let lastSyncServer: string | null = null;
+
+  try {
+    const response = await tentarRequisicao(() => api.get('vendedores'), 3, 1500);
+    vendedores = Array.isArray(response.data?.vendedores)
+      ? response.data.vendedores
+      : Array.isArray(response.data) ? response.data : [];
+    lastSyncServer = response.data?.last_sync
+      ? format(parseISO(response.data.last_sync), "yyyy-MM-dd HH:mm:ss")
+      : null;
+  } catch (err: any) {
+    console.error('❌ Erro ao buscar vendedores:', err.message);
+    throw err;
+  }
+
+  // Filtra registros válidos e aplica formatação de data
+  const vendedoresValidos: VendedorLocal[] = vendedores
+    .filter(v => v.empresa != null && v.codigo != null)
+    .map(v => ({
+      empresa: Number(v.empresa),
+      codigo: String(v.codigo),
+      codigorota: v.cd_rota != null ? Number(v.cd_rota) : null,
+      nome: v.nome ?? '',
+      situacaoRegistro: v.situacaoRegistro ?? 'I',
+      dataRegistro: v.dataRegistro ? format(parseISO(v.dataRegistro), "yyyy-MM-dd HH:mm:ss") : '',
+      versao: v.versao ?? 1,
+    }))
+    .filter(v => {
+      if (!filtroData) return true;
+      return new Date(v.dataRegistro).getTime() > filtroData.getTime();
+    });
+
+  // Buscar vendedores locais
+  const locais = await database.getAllAsync<VendedorLocal>('SELECT * FROM cadvendedor');
+  const mapaLocais = new Map(locais.map(v => [`${v.empresa}-${v.codigo}`, v]));
 
   let totalInseridos = 0;
   let totalAtualizados = 0;
   let totalIgnorados = 0;
 
-  try {
-    
-    const response = await tentarRequisicao(() => api.get('condicoespagamento'), 3, 2000);
-    const dados = response.data;
-    condicoes = Array.isArray(dados) ? dados : [dados];
-  } catch (error: any) {
-    console.log('❌ Erro ao buscar do condições de pagamento após 3 tentativas:', error.message);
-    return { inseridos: 0, atualizados: 0, ignorados: 0 };
-  } 
+  await database.withTransactionAsync(async () => {
+    for (const vendedor of vendedoresValidos) {
+      const chave = `${vendedor.empresa}-${vendedor.codigo}`;
+      const atual = mapaLocais.get(chave);
 
+      const dadosDiferentes = (novo: VendedorLocal, atual?: VendedorLocal) => {
+        if (!atual) return true;
+        const campos: (keyof VendedorLocal)[] = ['codigorota', 'nome', 'situacaoRegistro', 'dataRegistro', 'versao'];
+        return campos.some(campo => (novo[campo] ?? '') !== (atual[campo] ?? ''));
+      };
 
-  try {
-    interface CondicaoPagamento {
-      empresa: number;
-      codigo: string;
-      // Outros campos conforme a estrutura da tabela
-    }
-
-    const locais = await database.getAllAsync<CondicaoPagamento>('SELECT * FROM cadcondicaopagamento');
-    const mapaLocais = new Map(locais.map(c => [`${c.empresa}-${c.codigo}`, c]));
-
-    await database.withTransactionAsync(async () => {
-      for (let condicao of condicoes) {
-        try {
-          const chave = `${condicao.empresa}-${condicao.codigo}`;
-          const atual = mapaLocais.get(chave);
-
-          function dadosDiferentes(novo: any, atual: any) {
-            const campos = [
-              'descricao', 'acrescimo', 'desconto',
-              'situacaoRegistro', 'dataRegistro', 'versao'
-            ];
-            return campos.some(campo => {
-              const novoVal = novo[campo] ?? '';
-              const atualVal = atual?.[campo] ?? '';
-              return novoVal.toString().trim() !== atualVal.toString().trim();
-            });
-          }
-
-          if (!atual) {
-            await database.runAsync(
-              `INSERT INTO cadcondicaopagamento (
-                empresa, codigo, descricao, acrescimo, desconto,
-                situacaoRegistro, dataRegistro, versao
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-              [
-                condicao.empresa,
-                condicao.codigo,
-                condicao.descricao ?? '',
-                condicao.acrescimo ?? 0.0,
-                condicao.desconto ?? 0.0,
-                condicao.situacaoRegistro ?? 'I',
-                condicao.dataRegistro ?? '',
-                condicao.versao ?? 1
-              ]
-            );
-            console.log(`✅ Cond. pagamento ${condicao.codigo} inserida.`);
-            totalInseridos++;
-          } else if (dadosDiferentes(condicao, atual)) {
-            await database.runAsync(
-              `UPDATE cadcondicaopagamento SET
-                descricao = ?, acrescimo = ?, desconto = ?,
-                situacaoRegistro = ?, dataRegistro = ?, versao = ?
-              WHERE empresa = ? AND codigo = ?`,
-              [
-                condicao.descricao ?? '',
-                condicao.acrescimo ?? 0.0,
-                condicao.desconto ?? 0.0,
-                condicao.situacaoRegistro ?? 'I',
-                condicao.dataRegistro ?? '',
-                condicao.versao ?? 1,
-                condicao.empresa,
-                condicao.codigo
-              ]
-            );
-            console.log(`🔄 Cond. pagamento ${condicao.codigo} atualizada.`);
-            totalAtualizados++;
-          } else {
-            console.log(`⏭ Cond. pagamento ${condicao.codigo} sem alteração.`);
-            totalIgnorados++;
-          }
-
-        } catch (err) {
-          console.error(`❌ Erro ao processar condição ${condicao.codigo}:`, err);
+      try {
+        if (!atual) {
+          await database.runAsync(
+            `INSERT INTO cadvendedor (empresa, codigo, codigorota, nome, situacaoRegistro, dataRegistro, versao)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              vendedor.empresa,
+              vendedor.codigo,
+              vendedor.codigorota,
+              vendedor.nome,
+              vendedor.situacaoRegistro,
+              vendedor.dataRegistro,
+              vendedor.versao,
+            ]
+          );
+          totalInseridos++;
+        } else if (dadosDiferentes(vendedor, atual)) {
+          await database.runAsync(
+            `UPDATE cadvendedor SET codigorota=?, nome=?, situacaoRegistro=?, dataRegistro=?, versao=? 
+             WHERE empresa=? AND codigo=?`,
+            [
+              vendedor.codigorota,
+              vendedor.nome,
+              vendedor.situacaoRegistro,
+              vendedor.dataRegistro,
+              vendedor.versao,
+              vendedor.empresa,
+              vendedor.codigo,
+            ]
+          );
+          totalAtualizados++;
+        } else {
+          totalIgnorados++;
         }
+      } catch (err) {
+        console.error(`❌ Erro ao processar vendedor ${vendedor.codigo}:`, err);
+        totalIgnorados++;
       }
-    });
+    }
+  });
 
-    console.log(`📊 Sincronização de condições de pagamento finalizada.`);
-    const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
-    return { inseridos: totalInseridos, atualizados: totalAtualizados, ignorados: totalIgnorados, totalProcessados };
-  } catch (error: any) {
-    console.error('❌ Erro geral ao sincronizar condições de pagamento:', error.message);
-    throw new Error('Falha na sincronização das condições de pagamento');
+  // Atualiza last_sync local
+  if (lastSyncServer) {
+    await salvarConfig("last_sync_vendedores", lastSyncServer);
+    console.log("⏱ last_sync atualizado para:", lastSyncServer);
   }
+
+  const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
+
+  console.log(`🏁 Sincronização finalizada: inseridos=${totalInseridos}, atualizados=${totalAtualizados}, ignorados=${totalIgnorados}, total processados=${totalProcessados}`);
+
+  return {
+    inseridos: totalInseridos,
+    atualizados: totalAtualizados,
+    ignorados: totalIgnorados,
+    totalProcessados,
+    lastSync: lastSyncServer
+  };
 }
+
+
+
+
+// ***********************Inicio da função de sincronização forma de pagamento **************************
+//-------------------------------------------------------------------------------------------------------
+async function sincronizarCondicoesPagamento(): Promise<{
+  inseridos: number;
+  atualizados: number;
+  ignorados: number;
+  totalProcessados: number;
+  lastSync?: string | null;
+}> {
+  const database = DatabaseManager.getCurrentDatabase();
+  if (!database) throw new Error("Database não disponível para sincronização de CONDIÇÕES DE PAGAMENTO");
+
+  let totalInseridos = 0;
+  let totalAtualizados = 0;
+  let totalIgnorados = 0;
+
+  // 1️⃣ Recupera last_sync local
+  const lastSyncLocal = await carregarConfig("last_sync_condicoes");
+  console.log("⏱ Última sincronização local:", lastSyncLocal ?? "—");
+
+  // 2️⃣ Chamada à API
+  const url = lastSyncLocal
+    ? `condicoespagamento?last_sync=${encodeURIComponent(lastSyncLocal)}`
+    : "condicoespagamento";
+
+  let condicoes: any[] = [];
+  let lastSyncServer: string | null = null;
+
+  try {
+    const response = await tentarRequisicao(() => api.get(url), 3, 2000);
+    const dados = response.data;
+    condicoes = Array.isArray(dados?.condicoes) ? dados.condicoes : (Array.isArray(dados) ? dados : []);
+    lastSyncServer = dados?.last_sync ? format(parseISO(dados.last_sync), "yyyy-MM-dd HH:mm:ss") : null;
+    console.log(`📦 Condições recebidas: ${condicoes.length}`);
+  } catch (error: any) {
+    console.error('❌ Erro ao buscar condições de pagamento:', error.message);
+    return { inseridos: 0, atualizados: 0, ignorados: 0, totalProcessados: 0 };
+  }
+
+  // 3️⃣ Busca registros locais
+  const locais = await database.getAllAsync<any>('SELECT * FROM cadcondicaopagamento');
+  const mapaLocais = new Map(locais.map(c => [`${c.empresa}-${c.codigo}`, c]));
+
+  // 4️⃣ Se API não retornou nada => conta todos locais como ignorados
+  if (!condicoes || condicoes.length === 0) {
+    totalIgnorados = locais.length;
+    if (lastSyncServer) await salvarConfig("last_sync_condicoes", lastSyncServer);
+    console.log(`🏁 Condições: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=0`);
+    return {
+      inseridos: totalInseridos,
+      atualizados: totalAtualizados,
+      ignorados: totalIgnorados,
+      totalProcessados: 0,
+      lastSync: lastSyncServer
+    };
+  }
+
+  // 5️⃣ Filtra válidos
+  const condicoesValidas = condicoes.filter(c => c.empresa != null && c.codigo != null);
+  const descartados = condicoes.length - condicoesValidas.length;
+  if (descartados > 0) {
+    console.warn(`⚠️ Condições descartadas por falta de chave: ${descartados}`);
+    totalIgnorados += descartados;
+  }
+
+  // 6️⃣ Transação de upsert
+  await database.withTransactionAsync(async () => {
+    for (const cond of condicoesValidas) {
+      try {
+        const chave = `${cond.empresa ?? 0}-${cond.codigo ?? ''}`;
+        const registroAtual = mapaLocais.get(chave);
+
+        const registro = {
+          ...cond,
+          dataRegistro: cond.dataRegistro ? format(parseISO(cond.dataRegistro), "yyyy-MM-dd HH:mm:ss") : ''
+        };
+
+        const dadosDiferentes = (novo: any, atual?: any) => {
+          if (!atual) return true;
+          const campos = ['descricao', 'acrescimo', 'desconto', 'situacaoRegistro', 'dataRegistro', 'versao'];
+          return campos.some(campo => String(novo[campo] ?? '').trim() !== String(atual[campo] ?? '').trim());
+        };
+
+        if (!registroAtual) {
+          await database.runAsync(
+            `INSERT INTO cadcondicaopagamento (
+              empresa, codigo, descricao, acrescimo, desconto,
+              situacaoRegistro, dataRegistro, versao
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              registro.empresa ?? 0,
+              registro.codigo ?? '',
+              registro.descricao ?? '',
+              registro.acrescimo ?? 0.0,
+              registro.desconto ?? 0.0,
+              registro.situacaoRegistro ?? 'I',
+              registro.dataRegistro ?? '',
+              registro.versao ?? 1
+            ]
+          );
+          totalInseridos++;
+        } else if (dadosDiferentes(registro, registroAtual)) {
+          await database.runAsync(
+            `UPDATE cadcondicaopagamento SET
+              descricao=?, acrescimo=?, desconto=?,
+              situacaoRegistro=?, dataRegistro=?, versao=?
+            WHERE empresa=? AND codigo=?`,
+            [
+              registro.descricao ?? '',
+              registro.acrescimo ?? 0.0,
+              registro.desconto ?? 0.0,
+              registro.situacaoRegistro ?? 'I',
+              registro.dataRegistro ?? '',
+              registro.versao ?? 1,
+              registro.empresa ?? 0,
+              registro.codigo ?? ''
+            ]
+          );
+          totalAtualizados++;
+        } else {
+          totalIgnorados++;
+        }
+
+      } catch (err) {
+        console.error(`❌ Erro ao processar condição ${cond.codigo}:`, err);
+        totalIgnorados++;
+      }
+    }
+  });
+
+  // 7️⃣ Atualiza last_sync
+  if (lastSyncServer) {
+    await salvarConfig("last_sync_condicoes", lastSyncServer);
+    console.log("⏱ last_sync atualizado para:", lastSyncServer);
+  }
+
+  // 8️⃣ Totais finais
+  const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
+  console.log(`🏁 Condições: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
+
+  return {
+    inseridos: totalInseridos,
+    atualizados: totalAtualizados,
+    ignorados: totalIgnorados,
+    totalProcessados,
+    lastSync: lastSyncServer
+  };
+}
+
+
 
 // =============================================================================================
 //                         ROTINA PARA GRAVAR PEDIDO DE VENDA    
@@ -1225,6 +1385,7 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
     if (!pedido.dataregistro) throw new Error("Data de registro não informada.");
 
     let numerodocumento: number;
+    
 
     // Verifica se já existe pedido em aberto
     const result = await database.getFirstAsync<{ numerodocumento: number }>(
@@ -1425,10 +1586,12 @@ interface ItemPedido {
 }
 
 interface CabecalhoPedido {
-  
+  numerodocumento: number;
+  codigocliente: string;
   nomecliente: string;
+  codigovendedor: string;
   nomevendedor: string;
-  descricaoforma: string;
+  codigoformaPgto: string;
   valorDesconto: number;
   valorDespesas: number;
   valorFrete: number;
@@ -1487,10 +1650,13 @@ async function carregarPedidoCompleto(empresa: number, numerodocumento: number) 
   }
 
   const cabecalho: CabecalhoPedido = {    
+    numerodocumento: linhas[0]?.numerodocumento ?? 0,
+    codigocliente: linhas[0]?.codigocliente ?? '',
     nomecliente: linhas[0]?.nomecliente ?? '',
+    codigovendedor: linhas[0]?.codigovendedor ?? '',
     nomevendedor: linhas[0]?.nomevendedor ?? '',
     Observacao: linhas[0]?.observacao ?? '',
-    descricaoforma: linhas[0]?.descricaoforma ?? '',
+    codigoformaPgto: linhas[0]?.codigocondPagamento ?? '',
     valorDesconto: Number(linhas[0]?.valorDesconto ?? 0),
     valorDespesas: Number(linhas[0]?.valorDespesas ?? 0),
     valorFrete: Number(linhas[0]?.valorFrete ?? 0),
@@ -1721,10 +1887,11 @@ const atualizarPedido = async (
   numerodocumento: number,
   codigocliente: string,
   codigoproduto: string,
-  novaQuantidade: number,
-  observacao: string
+  novaQuantidade: number,  
 ): Promise<boolean> => {
   try {
+    console.log("Atualizando item do pedido:", { empresa, numerodocumento, codigocliente, codigoproduto, novaQuantidade });
+
     // 1️⃣ Atualiza a quantidade
     await database.runAsync(
       `UPDATE movnotaitem 
@@ -2213,19 +2380,15 @@ async function sincronizarTodosPedidos() {
 //                          EXPORTAÇÃO DAS FUNÇÕES DE SINCRONIZAÇÃO
 //-----------------------------------------------------------------------------------------------
 async function sincronizarPedidosSelecionados(numeros: number[]) {
-
-  
-
   try {
     if (!numeros || numeros.length === 0) {
       console.log('Nenhum pedido selecionado para sincronizar');
       return true;
     }
 
-    // Transformar array de números em string para SQL IN (?, ?, ?)
     const placeholders = numeros.map(() => '?').join(',');
-    
-    // Buscar apenas os pedidos selecionados
+
+    // Busca pedidos que ainda não foram marcados como 'R' ou excluídos
     const movnotas = (await database.getAllAsync(
       `SELECT * FROM movnota WHERE numerodocumento IN (${placeholders}) AND status != 'R' AND situacaoRegistro <> 'E'`,
       numeros
@@ -2236,14 +2399,15 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
       return true;
     }
 
-    for (const nota of movnotas) {
+    // Função que envia um único pedido
+    const enviarPedido = async (nota: MovNota) => {
       const itens = (await database.getAllAsync(
         `SELECT * FROM movnotaitem WHERE numerodocumento = ? AND situacaoRegistro <> 'E'`,
         [nota.numerodocumento]
       )) as MovNotaItem[];
 
       const payload = {
-        idpedido: nota.id, // Adicionando ID para rastreamento
+        idpedido: nota.id,
         empresa: nota.empresa,
         numerodocumento: nota.numerodocumento,
         codigocondPagamento: nota.codigocondPagamento,
@@ -2260,8 +2424,8 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
         status: nota.status,
         dataLancamento: nota.dataLancamento,
         dataRegistro: nota.dataRegistro,
-        itens: itens.map((item: MovNotaItem) => ({
-          idpedido: item.id, // Adicionando ID do item para rastreamento
+        itens: itens.map(item => ({
+          idpedido: item.id,
           empresa: item.empresa,
           numerodocumento: item.numerodocumento,
           codigovendedor: item.codigovendedor,
@@ -2279,21 +2443,42 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
       };
 
       try {
-        
         const response = await api.post('pedidos', payload);
+
         if (response.status === 200) {
-          await database.runAsync(
-            `UPDATE movnota SET status = 'R' WHERE numerodocumento = ?`,
-            [nota.numerodocumento]
-          );
-          console.log(`Pedido ${nota.numerodocumento} sincronizado com sucesso!`);
+          const data = response.data;
+
+          // Se já sincronizado ou hash existe → marca local como 'R'
+          if (data.status === 'ja_sincronizado' || data.pedido_hash) {
+            await database.runAsync(
+              `UPDATE movnota SET status = 'R' WHERE numerodocumento = ?`,
+              [nota.numerodocumento]
+            );
+            console.log(`Pedido ${nota.numerodocumento} já sincronizado no servidor.`);
+          } else {
+            await database.runAsync(
+              `UPDATE movnota SET status = 'R' WHERE numerodocumento = ?`,
+              [nota.numerodocumento]
+            );
+            console.log(`Pedido ${nota.numerodocumento} sincronizado com sucesso!`);
+          }
         } else {
           console.log(`Falha ao enviar pedido ${nota.numerodocumento}:`, response.status);
         }
       } catch (error: any) {
         console.log(`Erro ao enviar pedido ${nota.numerodocumento}:`, error.message);
       }
-    }
+    };
+
+    // Envia todos os pedidos em paralelo
+    const resultados = await Promise.allSettled(movnotas.map(nota => enviarPedido(nota)));
+
+    // Log final de resultados
+    resultados.forEach((res, index) => {
+      if (res.status === 'rejected') {
+        console.log(`Pedido ${movnotas[index].numerodocumento} falhou na sincronização:`, res.reason);
+      }
+    });
 
     return true;
   } catch (err: any) {
@@ -2301,6 +2486,7 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
     return false;
   }
 }
+
 
 //===============================================================================================
 //                  DUPLICAR PEDIDO DE VENDA
@@ -2423,11 +2609,46 @@ async function DuplicarPedido(
   }
 }
 
+// ===============================================================================================
+//                          FUNÇÕES AUXILIARES DE CONFIGURAÇÃO
+//-----------------------------------------------------------------------------------------------
 
+async function salvarConfig(
+  
+  chave: string,
+  valor: string
+): Promise<void> {
+  try {
+    await database.runAsync(
+      `INSERT OR REPLACE INTO config (chave, valor) VALUES (?, ?)`,
+      [chave, valor]
+    );
+    console.log(`✅ Config [${chave}] atualizada com sucesso`);
+  } catch (error) {
+    console.error(`❌ Erro ao salvar config [${chave}]:`, error);
+    throw error;
+  }
+}
 
+async function carregarConfig(  
+  chave: string
+): Promise<string | null> {
+  try {
+    const row = await database.getFirstAsync<{ valor: string }>(
+      `SELECT valor FROM config WHERE chave = ?`,
+      [chave]
+    );
+    return row?.valor ?? null;
+  } catch (error) {
+    console.error(`❌ Erro ao carregar config [${chave}]:`, error);
+    return null;
+  }
+}
 
+//==================================FIM==========================================================
 //===============================================================================================
-
+//                          EXPORTAÇÃO DAS FUNÇÕES DE SINCRONIZAÇÃO
+//-----------------------------------------------------------------------------------------------
 
   return { sincronizarEmpresas, sincronizarProdutos, sincronizarImagens, ListarItens, 
            ConsultarEmpresa, sincronizarParametros, sincronizarClientes, ListarClientes, 
@@ -2436,7 +2657,7 @@ async function DuplicarPedido(
            buscarFormaPagamentoDoPedido, excluirItemPedido, atualizarPedido, atualizarObservacao,
            ConsultaPedido ,validarUsuarioLocal,  GravarPedidos, buscarVendedorDoUsuario, 
            sincronizarPedidosSelecionados, sincronizarTodosPedidos, deletarPedidoPorNumero,
-           DuplicarPedido,
+           DuplicarPedido, salvarConfig, carregarConfig
           };
 }
 

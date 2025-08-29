@@ -7,7 +7,7 @@ type ImagemServidor = string;
 const pastaIbvendas = RNFS.DocumentDirectoryPath + '/ibvendas/img/';
 
 // Função para obter o token do CNPJ
-const obterTokenCNPJ = async (): Promise<string> => {
+export const obterTokenCNPJ = async (): Promise<string> => {
   try {
     const token = await AsyncStorage.getItem('@CNPJ');
     if (token) {

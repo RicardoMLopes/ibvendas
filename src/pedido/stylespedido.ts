@@ -81,7 +81,7 @@ rodape: {
   },
   botaoFaturar: {
     flex: 1,
-    backgroundColor: '#068d43e2',
+    backgroundColor: '#0fc661e2',
     padding: 12,
     borderRadius: 8,
     alignItems: 'center',

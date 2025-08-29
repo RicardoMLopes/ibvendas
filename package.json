@@ -10,6 +10,7 @@
     "web": "expo start --web"
   },
   "dependencies": {
+    "@emailjs/browser": "^4.4.1",
     "@react-native-async-storage/async-storage": "2.1.2",
     "@react-native-community/datetimepicker": "8.4.1",
     "@react-navigation/bottom-tabs": "^7.4.5",
@@ -20,6 +21,7 @@
     "expo": "53.0.22",
     "expo-crypto": "~14.1.5",
     "expo-file-system": "~18.1.11",
+    "expo-image-manipulator": "~13.1.7",
     "expo-print": "~14.1.4",
     "expo-sharing": "~13.1.5",
     "expo-sqlite": "~15.2.14",
@@ -27,17 +29,17 @@
     "expo-system-ui": "~5.0.11",
     "lottie-react-native": "7.2.2",
     "react": "19.0.0",
-    "react-native": "0.79.5",
+    "react-native": "0.79.6",
     "react-native-dotenv": "^3.4.11",
     "react-native-edge-to-edge": "1.6.0",
     "react-native-fs": "^2.20.0",
+    "react-native-gesture-handler": "~2.24.0",
+    "react-native-reanimated": "~3.17.4",
     "react-native-safe-area-context": "5.4.0",
     "react-native-screens": "~4.11.1",
     "react-native-share": "^12.2.0",
     "react-sqlite": "^1.0.0-alpha5",
-    "zustand": "^5.0.7",
-    "expo-image-manipulator": "~13.1.7",
-    "react-native-gesture-handler": "~2.24.0"
+    "zustand": "^5.0.7"
   },
   "devDependencies": {
     "@babel/core": "^7.25.2",
@@ -46,5 +48,16 @@
     "@types/react-dom": "^19.1.7",
     "typescript": "~5.8.3"
   },
-  "private": true
+  "private": true,
+  "expo": {
+    "doctor": {
+      "reactNativeDirectoryCheck": {
+        "exclude": [
+          "react-native-fs",
+          "react-sqlite"
+        ],
+        "listUnknownPackages": false
+      }
+    }
+  }
 }

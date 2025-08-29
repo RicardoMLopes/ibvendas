@@ -3,6 +3,7 @@ import * as Crypto from 'expo-crypto';
 import Configs from '../config/configs';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system';
+import  {obterTokenCNPJ}  from '../scripts/criarpasta';
 
 
 const SALT = Configs.SECRET_KEY
@@ -216,4 +217,30 @@ export async function obterInfoArquivoLocal(nomeArquivo: string): Promise<{ mtim
 export function arredondar(valor: number, casas: number = 2) {
   const fator = Math.pow(10, casas);
   return Math.round(valor * fator) / fator;
+}
+
+export async function contarImagensNoDispositivo(): Promise<number> {
+  // Obtém o token do CNPJ
+  const token = await obterTokenCNPJ();
+  const pastaImagens = (FileSystem.documentDirectory as string) + 'ibvendas/img/' + token + '/';
+
+  console.log(`🔍 Verificando pasta de imagens para o token ${token}: ${pastaImagens}`);
+
+  // Verifica se a pasta existe
+  const info = await FileSystem.getInfoAsync(pastaImagens);
+  if (!info.exists) {
+    console.log('⚠️ Pasta não existe. Criando...');
+    await FileSystem.makeDirectoryAsync(pastaImagens, { intermediates: true });
+    return 0; // ainda não há imagens
+  }
+
+  // Lista arquivos na pasta
+  const arquivos = await FileSystem.readDirectoryAsync(pastaImagens);
+  if (arquivos.length === 0) {
+    console.log('📂 Pasta existe, mas não contém nenhuma imagem.');
+  } else {
+    console.log(`📂 Pasta contém ${arquivos.length} imagem(ns).`);
+  }
+
+  return arquivos.length;
 }

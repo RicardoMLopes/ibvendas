@@ -6,74 +6,43 @@
     "orientation": "portrait",
     "icon": "./assets/empresa.png",
     "userInterfaceStyle": "light",
-    "newArchEnabled": true,
-    "assetBundlePatterns": [
-      "assets/**/*"
-    ],
+    "assetBundlePatterns": ["assets/**/*"],
     "splash": {
-      "image": "./assets/empresa.jpg",
+      "image": "./assets/empresa.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
     "ios": {
       "supportsTablet": true,
-      "plugins": [
-        [
-          "expo-sqlite",
-          {
-            "enableFTS": true,
-            "useSQLCipher": true,
-            "ios": {
-              "autoIncrement": true,
-              "customBuildFlags": [
-                "-DSQLITE_ENABLE_DBSTAT_VTAB=1 -DSQLITE_ENABLE_SNAPSHOT=1"
-              ]
-            }
-          }
-        ]
-      ]
+      "bundleIdentifier": "com.ricardolopes.ibvendas"
     },
     "android": {
-      "autoIncrement": true,
-      "usesCleartextTraffic": true,
       "permissions": [
-        "android.permission.SCHEDULE_EXACT_ALARM",
-        "android.settings.REQUEST_MANAGE_MEDIA",
-        "android.intent.action.OPEN_DOCUMENT",
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
-        "android.permission.VIBRATE",
-        "android.permission.INTERNET",
-        "android.permission.MODIFY_AUDIO_SETTINGS",
-        "android.permission.RECORD_AUDIO",
-        "android.permission.ACCESS_NETWORK_STATE",
-        "android.permission.ACCESS_FINE_LOCATION",
-        "android.permission.ACCESS_MEDIA_LOCATION",
-        "android.permission.ACCESS_BACKGROUND_LOCATION",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.MANAGE_MEDIA"
+        "android.permission.INTERNET"
       ],
       "adaptiveIcon": {
-        "foregroundImage": "./assets/empresa.jpg",
+        "foregroundImage": "./assets/empresa.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true,
-      "package": "com.ricardolopes.ibvendas",
-      "plugins": [
-        [
-          "expo-sqlite",
-          {
-            "enableFTS": false,
-            "useSQLCipher": false
-          }
-        ]
-      ]
+      "package": "com.ricardolopes.ibvendas"
     },
     "web": {
-      "favicon": "./assets/empresa.jpg"
+      "favicon": "./assets/empresa.png"
     },
     "plugins": [
-      "react-native-edge-to-edge"
+      "react-native-edge-to-edge",
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": true,
+          "useSQLCipher": true,
+          "ios": {
+            "customBuildFlags": [
+              "-DSQLITE_ENABLE_DBSTAT_VTAB=1 -DSQLITE_ENABLE_SNAPSHOT=1"
+            ]
+          }
+        }
+      ]
     ],
     "extra": {
       "router": {},

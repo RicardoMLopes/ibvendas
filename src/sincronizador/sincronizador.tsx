@@ -75,38 +75,7 @@ async function handleSync(type: string) {
 
   try {
     switch (type) {
-      case 'pedidos':
-        confirmAndRun(
-          'Sincronizar todos os pedidos?',
-          'Essa ação pode demorar dependendo da quantidade de pedidos. Deseja continuar?',
-          async () => {
-            setLoading(true);
-            setShowLog(false);
-            setSyncLogs([]);
-            setTotaisSincronizacao({});
-
-            adicionarLog('▶️ Iniciando sincronização dos Pedidos...');
-
-            try {
-              const { total, erros } = await sincronizarTodosPedidos();
-
-              adicionarLog(`✅ Pedidos sincronizados: ${total}`);
-              
-              if (erros.length > 0) {
-                adicionarLog(`⚠️ Alguns pedidos tiveram falha:`);
-                erros.forEach(e => adicionarLog(`   • ${e}`));
-              }
-
-              setTotaisSincronizacao(prev => ({ ...prev, pedidos: total }));
-            } catch (error) {
-              adicionarLog('❌ Falha na sincronização dos pedidos.');
-            } finally {
-              setLoading(false);
-              setShowLog(true);
-            }
-          }
-        );
-        break;
+      
 
       case 'produtos':
         confirmAndRun(
@@ -183,29 +152,29 @@ async function handleSync(type: string) {
         );
         break;
 
-      case 'condicoesPagamento':
-        confirmAndRun(
-          'Sincronizar formas de pagamento?',
-          'Deseja iniciar a sincronização das formas de pagamento?',
-          async () => {
-            setLoading(true);
-            setShowLog(false);
-            setSyncLogs([]);
-            setTotaisSincronizacao({});
+        case 'condicoesPagamento':
+          confirmAndRun(
+            'Sincronizar formas de pagamento?',
+            'Deseja iniciar a sincronização das formas de pagamento?',
+            async () => {
+              setLoading(true);
+              setShowLog(false);
+              setSyncLogs([]);
+              setTotaisSincronizacao({});
 
-            adicionarLog('▶️ Iniciando sincronização da forma de pgto...');
-            try {
-              const totalCondPagto = await sincronizarCondicoesPagamento();
-              adicionarLog(`✅ Forma de pgto sincronizados: ${totalCondPagto}`);
-              setTotaisSincronizacao(prev => ({ ...prev, condicoesPagamento: totalCondPagto }));
-            } catch (error) {
-              adicionarLog('❌ Falha na sincronização da forma de pgto.');
-            } finally {
-              setLoading(false);
-              setShowLog(true);
+              adicionarLog('▶️ Iniciando sincronização da forma de pgto...');
+              try {
+                const totalCondPagto = await sincronizarCondicoesPagamento();
+                adicionarLog(`✅ Forma de pgto sincronizados: ${totalCondPagto}`);
+                setTotaisSincronizacao(prev => ({ ...prev, condicoesPagamento: totalCondPagto }));
+              } catch (error) {
+                adicionarLog('❌ Falha na sincronização da forma de pgto.');
+              } finally {
+                setLoading(false);
+                setShowLog(true);
+              }
             }
-          }
-        );
+          );
         break;
 
       case 'vendedores':
@@ -231,41 +200,85 @@ async function handleSync(type: string) {
             }
           }
         );
-        break;
+        break;  
 
-     case 'imagens':
-        confirmAndRun(
-          'Sincronizar imagens?',
-          'Deseja iniciar a sincronização das imagens?',
-          async () => {
-            setLoading(true);
-            setShowLog(false);
-            setSyncLogs([]);
-            setTotaisSincronizacao({});
 
-            adicionarLog('▶️ Iniciando sincronização das imagens...');
-            try {
-              const { novas, atualizadas, total } = await sincronizarImagens(); // agora retorna objeto
-              adicionarLog(
-                            `\n📊 Resultado da sincronização:\n` +
-                            `🆕 Novas: ${novas}\n` +
-                            `🔄 Atualizadas: ${atualizadas}\n` +
-                            `📦 Total: ${total}`
-                          );
+        case 'imagens':
+          confirmAndRun(
+            'Sincronizar imagens?',
+            'Deseja iniciar a sincronização das imagens?',
+            async () => {
+              setLoading(true);
+              setShowLog(false);
+              setSyncLogs([]);
+              setTotaisSincronizacao({});
 
-              setTotaisSincronizacao(prev => ({
-                ...prev,
-                imagens: { novas, atualizadas, total }
-              }));
-            } catch (error) {
-              adicionarLog('❌ Falha na sincronização das imagens.');
-            } finally {
-              setLoading(false);
-              setShowLog(true);
+              adicionarLog('▶️ Iniciando sincronização das imagens...');
+
+              try {
+                const inicio = Date.now();
+
+                // Chama a função revisada que sempre retorna o total de imagens no dispositivo
+                const { novas, atualizadas, total } = await sincronizarImagens();
+
+                const fim = Date.now();
+                const duracao = ((fim - inicio) / 1000).toFixed(2); // tempo em segundos
+
+                // Log no formato desejado, incluindo tempo
+                adicionarLog(
+                  `\n📊 Resultado da sincronização:\n` +
+                  `🆕 Novas: ${novas}, 🔄 Atualizadas: ${atualizadas}, 📦 Total: ${total}\n` +
+                  `⏱️ Tempo de execução: ${duracao}s`
+                );
+
+                // Atualiza o estado com os totais
+                setTotaisSincronizacao(prev => ({
+                  ...prev,
+                  imagens: { novas, atualizadas, total }
+                }));
+
+              } catch (error: any) {
+                adicionarLog(`❌ Falha na sincronização das imagens: ${error.message || error}`);
+              } finally {
+                setLoading(false);
+                setShowLog(true);
+              }
             }
-          }
-        );
-        break;
+          );
+          break;
+
+        case 'pedidos':
+            confirmAndRun(
+              'Sincronizar todos os pedidos?',
+              'Essa ação pode demorar dependendo da quantidade de pedidos. Deseja continuar?',
+              async () => {
+                setLoading(true);
+                setShowLog(false);
+                setSyncLogs([]);
+                setTotaisSincronizacao({});
+
+                adicionarLog('▶️ Iniciando sincronização dos Pedidos...');
+
+                try {
+                  const { total, erros } = await sincronizarTodosPedidos();
+
+                  adicionarLog(`✅ Pedidos sincronizados: ${total}`);
+                  
+                  if (erros.length > 0) {
+                    adicionarLog(`⚠️ Alguns pedidos tiveram falha:`);
+                    erros.forEach(e => adicionarLog(`   • ${e}`));
+                  }
+
+                  setTotaisSincronizacao(prev => ({ ...prev, pedidos: total }));
+                } catch (error) {
+                  adicionarLog('❌ Falha na sincronização dos pedidos.');
+                } finally {
+                  setLoading(false);
+                  setShowLog(true);
+                }
+              }
+            );
+        break;  
 
       default:
         adicionarLog('⚠️ Tipo de sincronização inválido.');
@@ -279,24 +292,25 @@ async function handleSync(type: string) {
 
 
   // cores diferentes para os botões (tons de azul)
-  const buttonColors: Record<string, string> = {
-    pedidos: '#00AFFF',
-    produtos: '#007AFF',
-    clientes: '#005FCC',
-    parametros: '#004499',
-    condicoesPagamento: '#003366',
-    vendedores: '#002244',
-    imagens: '#001122',
+  const buttonColors: Record<string, string> = {    
+    produtos: '#00BFFF',
+    clientes: '#1E90FF',
+    parametros: '#4169E1',
+    condicoesPagamento: '#0000FF',
+    vendedores: '#0000CD',
+    imagens: '#00008B',
+    pedidos: '#6809ecff',
   };
 
   const buttonLabels: Record<string, string> = {
-  pedidos: 'Sincronizar Pedidos',
+  
   produtos: 'Sincronizar Produtos',
   clientes: 'Sincronizar Clientes',
   parametros: 'Sincronizar Parâmetros',
   condicoesPagamento: 'Sincronizar Condições de pagamento',
   vendedores: 'Sincronizar Vendedores',
   imagens: 'Sincronizar Imagens',
+  pedidos: 'Sincronizar Pedidos',
 };
 
   return (
