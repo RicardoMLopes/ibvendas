@@ -189,8 +189,8 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
       setLoginError('Usuário ou senha inválidos.');
       Vibration.vibrate(500);
       setTimeout(() => setLoginError(''), 3000);
-      await sincronizarUsuarios();
-      await sincronizarVendedores();
+    //  await sincronizarUsuarios();
+    //  await sincronizarVendedores();
       return;
     }
 
@@ -224,7 +224,8 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     setErroSenha('');
     setLoginError('');
   };
-
+  
+{/* ROtina parado, não esta sendo usado no momento.  
   function GerarCatalago(): void {
     const url = 'http://192.168.100.40:8000/';
     Linking.canOpenURL(url)
@@ -234,6 +235,8 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
       })
       .catch(() => Alert.alert('Erro', 'Ocorreu um erro ao tentar abrir o link.'));
   }
+
+*/}
 
   const handleBlurBuscar = () => {
     buscarUsuario(cpfCnpj, setEmpresa, setEmpresaCodigo, setCpfCnpj, setUsuarioEncontrado, setLoading);
@@ -314,7 +317,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
 
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>          
 
-            <TouchableOpacity onPress={() => Linking.openURL('https://servidor-64qt.onrender.com/')}>
+            <TouchableOpacity onPress={() => Linking.openURL('https://servidor-64qt.onrender.com/cadusuarios/')}>
               <Text style={{ color: 'blue', fontWeight: 'bold' }}>Cadastrar usuário</Text>
             </TouchableOpacity>
           </View>

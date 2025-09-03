@@ -8,6 +8,7 @@ import { SQLiteProvider, defaultDatabaseDirectory } from 'expo-sqlite';
 import RoutesStacks from './src/routes/stacks';
 import { Paths } from 'expo-file-system/next';
 import { initializedatabase } from './src/database';
+import MarcaDagua from './src/theme/marcadagua';
 
 // Habilita react-native-screens para melhorar performance de navegação
 enableScreens();
@@ -46,6 +47,8 @@ export default function App() {
           ) : (
             <RoutesStacks onLoginSuccess={setCnpj} />
           )}
+          <MarcaDagua />
+
         </NavigationContainer>
       </SafeAreaProvider>
     </GestureHandlerRootView>

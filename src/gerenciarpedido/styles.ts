@@ -126,23 +126,36 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  totalizadorContainer: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    bottom: 50,
-    backgroundColor: '#CDCDCDCD',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderTopWidth: 1,
-    borderColor: '#999',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 5,
-  },
+totalizadorContainer: {
+  position: 'absolute',
+  left: 0,
+  right: 0,
+  bottom: 50,
+  backgroundColor: '#CDCDCDCD',
+  paddingVertical: 8,
+  paddingHorizontal: 16,
+  borderTopWidth: 1,
+  borderColor: '#999',
+  flexDirection: 'row',           // ← Alinha em linha
+  justifyContent: 'space-between', // ← Espaça entre os dois textos
+  alignItems: 'center',           // ← Alinha verticalmente
+  shadowColor: '#000',
+  shadowOffset: { width: 0, height: -2 },
+  shadowOpacity: 0.1,
+  shadowRadius: 4,
+  elevation: 5,
+},
+label: {
+  fontWeight: 'bold',
+  color: '#2318f1ff',
+  fontSize: 18,
+},
+
+valor: {
+  fontWeight: 'bold',
+  color: '#2318f1ff',
+  fontSize: 18,
+},
 
   totalizadorTexto: {
     fontWeight: 'bold',

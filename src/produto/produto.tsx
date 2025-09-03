@@ -89,7 +89,7 @@ export default function ListarProdutos(props: ListarProdutosProps) {
   const [precoMax, setPrecoMax] = useState('');
   const [filter, setfilter] = useState<Produto[]>([]);
   const [pedidoExistente, setPedidoExistente] = useState<any>(null); // Para verificar vendedor do pedido
-  
+  let NumeroPedidoAtual:any = cd_pedido;
 
   useEffect(() => {
     const carregarImagens = async () => {
@@ -109,7 +109,10 @@ const carregarDados = async () => {
   const { ListarItens, carregarPedidoCompleto, gerarnumerodocumento } = await useSyncEmpresa();
   try {
     // Carregar produtos
+    console.log("📌 carregarDados chamado com cd_pedido:", NumeroPedidoAtual);
     const itens = await ListarItens();
+     console.log("🛒 Itens do pedido carregados:", itens);
+
     const itensComValorVenda = itens.map((produto) => {
       const aplicarAcrescimo = produto.reajustacondicaopagamento === 'S';
       const valorunitariovenda = aplicarAcrescimo
@@ -121,7 +124,7 @@ const carregarDados = async () => {
         casasdecimais: parseCasasDecimais(produto.casasdecimais),
       };
     });
-
+    console.log("📦 Produtos carregados:", produtos.length);
     setProdutos(itensComValorVenda);
     setfilter(itensComValorVenda);
 
@@ -131,10 +134,10 @@ const carregarDados = async () => {
       const empresaNum = Number(empresaString);
       let pedido = null;
 
-      console.log('cd_pedido recebido:', cd_pedido);
+      console.log('cd_pedido recebido:', NumeroPedidoAtual);
 
-      if (cd_pedido && empresaNum) {
-        pedido = await carregarPedidoCompleto(empresaNum, Number(cd_pedido));
+      if (NumeroPedidoAtual && empresaNum) {
+        pedido = await carregarPedidoCompleto(empresaNum, Number(NumeroPedidoAtual));
       }
 
       setPedidoExistente(pedido);
@@ -158,7 +161,7 @@ const carregarDados = async () => {
 useFocusEffect(
   useCallback(() => {
     carregarDados();
-  }, [cd_pedido, acrescimo, permitirSelecao, codigocliente])
+  }, [NumeroPedidoAtual, acrescimo, permitirSelecao, codigocliente])
 );
 
 
@@ -179,6 +182,7 @@ useFocusEffect(
         }
 
         const numeroPedido = await gerarnumerodocumento(empresaNum, codigocliente);
+        NumeroPedidoAtual =  numeroPedido.toString(),
         navigation.setOptions({
           headerRight: () => (
             <View style={{ overflow: 'visible' }}>

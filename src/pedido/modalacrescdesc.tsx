@@ -35,24 +35,30 @@ export default function ModalAcrescDesc({
   const [forma, setForma] = useState<'valor' | 'percentual'>('percentual');
 
   // valorTexto para controlar texto digitado e evitar travar o campo
-  const [valorTexto, setValorTexto] = useState('0.00');
+  const [valorTexto, setValorTexto] = useState('0,00');
   // valor numérico real para uso interno
   const [valor, setValor] = useState(0);
 
   // Sincroniza valorTexto com valor numérico inicial (quando abrir modal)
   useEffect(() => {
-    setValorTexto(valor.toFixed(2));
-  }, [visivel]);
+  const parteInteira = Math.floor(valor);
+  const parteDecimal = Math.round((valor - parteInteira) * 100);
+
+  const valorFormatado = `${parteInteira},${parteDecimal.toString().padStart(2, '0')}`;
+  setValorTexto(valorFormatado);
+}, [visivel]);
 
   const alterarValor = (delta: number) => {
-    setValor((v) => {
-      let novo = v + delta;
-      if (novo < 0) novo = 0;
-      // Atualiza texto também
-      setValorTexto(novo.toFixed(2));
-      return parseFloat(novo.toFixed(2));
-    });
-  };
+  setValor((v) => {
+    let novo = Math.max(0, Math.round(v + delta)); // Garante inteiro e não-negativo
+
+    // Formata como "1,00", "2,00", etc.
+    const valorFormatado = `${novo},00`;
+    setValorTexto(valorFormatado);
+
+    return novo;
+  });
+};
 
   const validar = () => {
     if (!validarDesconto) return true;
@@ -152,23 +158,26 @@ export default function ModalAcrescDesc({
               keyboardType="numeric"
               value={valorTexto}
               onChangeText={(text) => {
-                // Substitui vírgula por ponto e remove caracteres inválidos
-                let valorLimpo = text.replace(',', '.').replace(/[^0-9.]/g, '');
+                // Remove tudo que não for número
+                let numeros = text.replace(/\D/g, '');
 
-                // Limita a 2 casas decimais
-                if (valorLimpo.includes('.')) {
-                  const partes = valorLimpo.split('.');
-                  valorLimpo = partes[0] + '.' + partes[1].slice(0, 2);
+                // Preenche com zeros à esquerda se necessário
+                while (numeros.length < 3) {
+                  numeros = '0' + numeros;
                 }
 
-                setValorTexto(valorLimpo);
+                // Separa os centavos
+                const parteInteira = numeros.slice(0, -2);
+                const parteDecimal = numeros.slice(-2);
 
-                const valorNumerico = parseFloat(valorLimpo);
-                if (!isNaN(valorNumerico) && valorNumerico >= 0) {
-                  setValor(valorNumerico);
-                } else {
-                  setValor(0);
-                }
+                // Formata com vírgula
+                const valorFormatado = `${parseInt(parteInteira)},${parteDecimal}`;
+
+                setValorTexto(valorFormatado);
+
+                // Converte para número real
+                const valorNumerico = parseFloat(`${parteInteira}.${parteDecimal}`);
+                setValor(valorNumerico);
               }}
             />
 

@@ -477,9 +477,8 @@ export default function GerenciarPedidos() {
       />
 
       <View style={styles.totalizadorContainer}>
-        <Text style={{ fontWeight: 'bold', color: '#2318f1ff', fontSize: 18 }}>
-          Valor Total: {formatarReais(totalValor)}
-        </Text>
+        <Text style={styles.label}>Valor Total:</Text>
+        <Text style={styles.valor}>{formatarReais(totalValor)}</Text>
       </View>
 
       {/* Modal de filtros */}
