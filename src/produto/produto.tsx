@@ -109,9 +109,9 @@ const carregarDados = async () => {
   const { ListarItens, carregarPedidoCompleto, gerarnumerodocumento } = await useSyncEmpresa();
   try {
     // Carregar produtos
-    console.log("📌 carregarDados chamado com cd_pedido:", NumeroPedidoAtual);
+  //  console.log("📌 carregarDados chamado com cd_pedido:", NumeroPedidoAtual);
     const itens = await ListarItens();
-     console.log("🛒 Itens do pedido carregados:", itens);
+  //   console.log("🛒 Itens do pedido carregados:", itens);
 
     const itensComValorVenda = itens.map((produto) => {
       const aplicarAcrescimo = produto.reajustacondicaopagamento === 'S';
@@ -124,7 +124,7 @@ const carregarDados = async () => {
         casasdecimais: parseCasasDecimais(produto.casasdecimais),
       };
     });
-    console.log("📦 Produtos carregados:", produtos.length);
+  //  console.log("📦 Produtos carregados:", produtos.length);
     setProdutos(itensComValorVenda);
     setfilter(itensComValorVenda);
 
@@ -134,7 +134,7 @@ const carregarDados = async () => {
       const empresaNum = Number(empresaString);
       let pedido = null;
 
-      console.log('cd_pedido recebido:', NumeroPedidoAtual);
+  //    console.log('cd_pedido recebido:', NumeroPedidoAtual);
 
       if (NumeroPedidoAtual && empresaNum) {
         pedido = await carregarPedidoCompleto(empresaNum, Number(NumeroPedidoAtual));

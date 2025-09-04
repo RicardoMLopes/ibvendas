@@ -1412,7 +1412,7 @@ async function GravarPedidos(pedido: Pedido): Promise<void> {
         pedido.valorFrete ?? 0,
         pedido.pesototal ?? 0,
         pedido.observacao ?? '',
-        formatarDataRegistro(pedido.datalancamento ?? new Date().toISOString()),
+        formatarDataRegistro(pedido.datalancamento ?? new Date()),
         formatarDataRegistro(pedido.dataregistro),
         pedido.empresa,
         numerodocumento
@@ -2492,26 +2492,124 @@ async function sincronizarPedidosSelecionados(numeros: number[]) {
 //                  DUPLICAR PEDIDO DE VENDA
 //-----------------------------------------------------------------------------------------------
 
+function formatarDataAgora(): string {
+  const agora = new Date();
+  const ano = agora.getFullYear();
+  const mes = String(agora.getMonth() + 1).padStart(2, "0");
+  const dia = String(agora.getDate()).padStart(2, "0");
+  const hora = String(agora.getHours()).padStart(2, "0");
+  const minuto = String(agora.getMinutes()).padStart(2, "0");
+  const segundo = String(agora.getSeconds()).padStart(2, "0");
+  return `${ano}-${mes}-${dia} ${hora}:${minuto}:${segundo}`;
+}
+
 async function DuplicarPedido(
-  empresa: number,               // number primitivo
-  numerodocumentoOrigem: number, // number primitivo
-  codigocliente: string         // string primitivo
+  empresa: number,
+  numerodocumentoOrigem: number,
+  codigocliente: string
 ): Promise<number> {
   try {
     await database.runAsync("BEGIN TRANSACTION");
 
     // 1️⃣ Recupera pedido original
     const pedidoOrigem = await database.getFirstAsync<any>(
-      `SELECT * FROM movnota WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND situacaoregistro <> 'E' AND status = 'R'`,
+      `SELECT * FROM movnota 
+       WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? 
+         AND situacaoregistro <> 'E' AND status = 'R'`,
       [empresa, numerodocumentoOrigem, codigocliente]
     );
-
     if (!pedidoOrigem) throw new Error("Pedido original não encontrado.");
+    console.log("Pedido original encontrado:", pedidoOrigem);
 
-    // 2️⃣ Gera novo numerodocumento
+    // 2️⃣ Recupera itens do pedido original
+    const itensOrigem: any[] = await database.getAllAsync(
+      `SELECT codigoproduto, descricaoproduto, quantidade, valorUnitario, valorunitariovenda, valorDesconto, valoracrescimo, codigovendedor
+       FROM movnotaitem
+       WHERE empresa = ? AND numerodocumento = ? AND codigocliente = ? AND situacaoRegistro <> 'E'`,
+      [empresa, numerodocumentoOrigem, codigocliente]
+    );
+    console.log(`Itens originais encontrados: ${itensOrigem.length}`);
+
+    // 3️⃣ Processa cada item
+    for (const item of itensOrigem) {
+      const produto = await database.getFirstAsync<any>(
+        `SELECT codigo, precovenda, reajustacondicaopagamento 
+         FROM cadproduto 
+         WHERE codigo = ? AND situacaoRegistro <> 'E'`,
+        [item.codigoproduto]
+      );
+      if (!produto) {
+        console.log(`⚠️ Produto ${item.codigoproduto} não encontrado no cadastro.`);
+        continue;
+      }
+
+      console.log("Produto item:", item.codigoproduto, "PRECO VENDA:", produto.precovenda, "Reajuste:", produto.reajustacondicaopagamento);
+
+      const quantidade = item.quantidade ?? 0;
+      const valorDesconto = item.valorDesconto ?? 0;
+      const valorAcrescimo = item.valoracrescimo ?? 0;
+
+      // Valor unitário base
+      item.valorunitario = produto.precovenda ?? 0;
+
+      // Reajuste pela condição de pagamento
+      if (produto.reajustacondicaopagamento === "S") {
+        const condPagamento = await database.getFirstAsync<any>(
+          `SELECT codigo, acrescimo, desconto 
+           FROM cadcondicaopagamento 
+           WHERE situacaoRegistro <> 'E' AND codigo = ?`,
+          [pedidoOrigem.codigocondPagamento]
+        );
+        if (condPagamento) {
+          const valorComAcrescimo = (produto.precovenda ?? 0) * (1 + (condPagamento.acrescimo ?? 0) / 100);
+          item.valorunitariovenda = Math.round(valorComAcrescimo * 100) / 100;
+        } else {
+          item.valorunitariovenda = produto.precovenda ?? 0;
+        }
+      } else {
+        item.valorunitariovenda = produto.precovenda ?? 0;
+      }
+
+      // Valor total do item
+      item.valorTotalItem = Math.round(
+        (quantidade * item.valorunitariovenda - valorDesconto + valorAcrescimo) * 100
+      ) / 100;
+
+      // Garantir vendedor
+      item.codigovendedor = item.codigovendedor ?? pedidoOrigem.codigovendedor ?? "00000";
+
+      console.log("Item processado:", {
+        codigoproduto: item.codigoproduto,
+        descricao: item.descricaoproduto,
+        quantidade,
+        valorUnitario: item.valorunitario,
+        valorUnitarioVenda: item.valorunitariovenda,
+        valorDesconto,
+        valorAcrescimo,
+        valorTotalItem: item.valorTotalItem,
+        codigovendedor: item.codigovendedor
+      });
+    }
+
+    // 4️⃣ Calcula valor total do pedido
+    const totalItens = itensOrigem.reduce((acc, item) => acc + (item.valorTotalItem ?? 0), 0);
+    const valorTotalPedido =
+      Math.round((totalItens - (pedidoOrigem.valorDesconto ?? 0) + (pedidoOrigem.valorDespesas ?? 0)) * 100) / 100;
+
+    console.log("Pedido a ser duplicado:", {
+      empresa,
+      codigocliente: pedidoOrigem.codigocliente,
+      codigocondPagamento: pedidoOrigem.codigocondPagamento,
+      valorDesconto: pedidoOrigem.valorDesconto,
+      valorDespesas: pedidoOrigem.valorDespesas,
+      valorFrete: pedidoOrigem.valorFrete,
+      valorTotalPedido
+    });
+
+    // 5️⃣ Novo número de documento
     const novoNumerodocumento = await gerarnumerodocumento(empresa, codigocliente);
 
-    // 3️⃣ Insere novo pedido
+    // 6️⃣ Insere pedido em movnota
     await database.runAsync(
       `INSERT INTO movnota (
         empresa, numerodocumento, codigocondPagamento, codigovendedor, codigocliente, nomecliente,
@@ -2528,31 +2626,17 @@ async function DuplicarPedido(
         pedidoOrigem.valorDesconto ?? 0,
         pedidoOrigem.valorDespesas ?? 0,
         pedidoOrigem.valorFrete ?? 0,
-        0, // valorTotal será recalculado
+        valorTotalPedido,
         pedidoOrigem.pesoTotal ?? 0,
         pedidoOrigem.observacao ?? '',
         'P',
-        pedidoOrigem.dataLancamento,
-        pedidoOrigem.dataRegistro
+        formatarDataAgora(),
+        formatarDataAgora()
       ]
     );
 
-    // 4️⃣ Recupera itens do pedido original
-    const itensOrigem: any[] = await database.getAllAsync(
-      `SELECT * FROM movnotaitem WHERE empresa = ? AND numerodocumento = ?`,
-      [empresa, numerodocumentoOrigem]
-    );
-
-    // 5️⃣ Insere itens no novo pedido
+    // 7️⃣ Insere itens em movnotaitem
     for (const item of itensOrigem) {
-      const valorTotalItem =
-            arredondar(
-              item.quantidade * arredondar(item.valorunitariovenda ?? 0, 2)
-              + arredondar(item.valoracrescimo ?? 0, 2)
-              - arredondar(item.valorDesconto ?? 0, 2)
-            );
-
-
       await database.runAsync(
         `INSERT INTO movnotaitem (
           empresa, numerodocumento, codigovendedor, codigoproduto, descricaoproduto,
@@ -2565,38 +2649,17 @@ async function DuplicarPedido(
           item.codigovendedor,
           item.codigoproduto,
           item.descricaoproduto ?? '',
-          item.valorUnitario,
+          item.valorunitario,
           item.valorunitariovenda,
           item.valorDesconto ?? 0,
           item.valoracrescimo ?? 0,
-          valorTotalItem,
+          item.valorTotalItem,
           item.quantidade,
-          item.dataRegistro,
-          item.codigocliente
+          formatarDataAgora(),
+          pedidoOrigem.codigocliente   // ✅ corrigido
         ]
       );
     }
-
-    // 6️⃣ Recalcula valorTotal do pedido duplicado
-    const resultadoTotal = await database.getFirstAsync<{ total: number }>(
-      `SELECT IFNULL(SUM(
-         ROUND(quantidade * ROUND(valorunitariovenda, 2), 2)
-         + ROUND(valoracrescimo, 2)
-         - ROUND(valorDesconto, 2)
-       ), 0) AS total
-       FROM movnotaitem
-       WHERE empresa = ? AND numerodocumento = ?`,
-      [empresa, novoNumerodocumento]
-    );
-
-    const totalItens = resultadoTotal?.total ?? 0;
-    const valorTotalFinal =
-      Math.round((totalItens - (pedidoOrigem.valorDesconto ?? 0) + (pedidoOrigem.valorDespesas ?? 0)) * 100) / 100;
-
-    await database.runAsync(
-      `UPDATE movnota SET valorTotal = ? WHERE empresa = ? AND numerodocumento = ?`,
-      [valorTotalFinal, empresa, novoNumerodocumento]
-    );
 
     await database.runAsync("COMMIT");
     console.log(`✅ Pedido duplicado com sucesso! Novo número: ${novoNumerodocumento}`);
@@ -2604,7 +2667,7 @@ async function DuplicarPedido(
 
   } catch (error: any) {
     await database.runAsync("ROLLBACK");
-    console.error("❌ Erro ao duplicar pedido:", error.message || error);
+    console.error("❌ Erro ao duplicar pedido reajustado:", error.message || error);
     throw error;
   }
 }

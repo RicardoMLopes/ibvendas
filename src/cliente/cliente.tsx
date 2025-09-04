@@ -14,9 +14,9 @@ import { adicionarValor } from '../scripts/adicionarourecuperar';
 import { RouteProp } from '@react-navigation/native';
 
 type RootStackParamList = {
-  ListarClientes: { selecionarHabilitado: boolean }; // ✅ Agora aceita o parâmetro
+  listarcliente: { selecionarHabilitado: boolean }; // ✅ Agora aceita o parâmetro
 };
-type ListarClientesRouteProp = RouteProp<RootStackParamList, 'ListarClientes'>;
+type ListarClientesRouteProp = RouteProp<RootStackParamList, 'listarcliente'>;
 interface ListarClientesProps {
   route: ListarClientesRouteProp;
 }

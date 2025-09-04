@@ -15,9 +15,9 @@ import GerenciarPedidos from '../gerenciarpedido/gerencial'
 // ⚙️ Criação da stack tipada
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-interface RoutesStacksProps {
-  onLoginSuccess: (cnpj: string) => void;
-}
+type RoutesStacksProps = {
+  onLoginSuccess?: (cnpj: string) => void;
+};
 
 // 🔧 Wrapper que injeta a função onLoginSuccess no Login
 const LoginWrapper: React.FC = () => {

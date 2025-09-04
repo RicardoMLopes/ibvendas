@@ -24,3 +24,12 @@ export const adicionarValor = async (chave: string, campo: string): Promise<stri
     return null;
   }
 };
+
+export const removerValor = async (chave: string): Promise<void> => {
+  try {
+    await AsyncStorage.removeItem(chave);
+  } catch (error) {
+    console.log(`Erro ao remover ${chave}:`, error);
+  }
+};
+

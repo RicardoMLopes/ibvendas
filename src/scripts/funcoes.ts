@@ -66,15 +66,16 @@ export function sanitizarNumero(valor: any, padrao = 0): number {
   return isNaN(num) ? padrao : num;
 }
 
-// Formatar data para o padrão 'YYYY-MM-DD HH:mm:ss.SS'
+// Formatar data para 'YYYY-MM-DD HH:mm:ss'
 export function formatarDataRegistro(data: any): string {
   if (!data) return '';
-  const d = new Date(data);
+  const d = data instanceof Date ? data : new Date(data);
   if (isNaN(d.getTime())) return ''; // Se não for data válida
-  const pad = (n: number, z = 2) => n.toString().padStart(z, '0');
+  const pad = (n: number) => n.toString().padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
-         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 2)}`;
+         `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
+
 
 
   // Formatar data para o padrão brasileiro 'DD/MM/YYYY HH:mm:ss'
