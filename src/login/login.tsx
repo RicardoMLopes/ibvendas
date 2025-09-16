@@ -317,7 +317,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
 
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>          
 
-            <TouchableOpacity onPress={() => Linking.openURL('https://servidor-64qt.onrender.com/cadusuarios/')}>
+            <TouchableOpacity onPress={() => Linking.openURL('https://smv.inf.br/cadusuarios/')}>
               <Text style={{ color: 'blue', fontWeight: 'bold' }}>Cadastrar usuário</Text>
             </TouchableOpacity>
           </View>

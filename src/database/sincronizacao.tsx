@@ -164,6 +164,7 @@ interface ProdutoAPI {
 }
 
 async function sincronizarProdutos(): Promise<{
+  totalNoBanco: number;
   inseridos: number;
   atualizados: number;
   ignorados: number;
@@ -175,103 +176,58 @@ async function sincronizarProdutos(): Promise<{
   const database = DatabaseManager.getCurrentDatabase();
   if (!database) throw new Error("Database não disponível para sincronização de PRODUTO");
 
-  // 1) last_sync local
-  const lastSyncLocal = await carregarConfig("last_sync_produtos");
-  console.log("⏱ Última sincronização local:", lastSyncLocal ?? "—");
+  // Buscar produtos locais
+  const locais = await database.getAllAsync<ProdutoLocal>("SELECT * FROM cadproduto");
+  const mapaLocais = new Map(locais.map(p => [`${p.empresa}-${p.codigo}`.trim().toLowerCase(), p]));
+  const temProdutosLocais = locais.length > 0;
 
-  // 2) chamada API
+  // Determinar last_sync a enviar
+  let lastSyncLocal: string | null = null;
+  if (temProdutosLocais) {
+    lastSyncLocal = await carregarConfig("last_sync_produtos");
+  }
+  console.log("⏱ Last sync que será enviado:", lastSyncLocal ?? "—");
+
+  // Construir URL
   const url = lastSyncLocal ? `produtos?last_sync=${encodeURIComponent(lastSyncLocal)}` : "produtos";
+  console.log("🌐 URL de sincronização:", url);
+
+  // Chamada API
   const response = await tentarRequisicao(() => api.get(url), 3, 1500);
   const dados = response.data;
-  const produtosRemotos: ProdutoAPI[] = Array.isArray(dados?.produtos)
-    ? dados.produtos
-    : Array.isArray(dados) ? dados : [];
-  const lastSyncServerRaw: string | null = dados?.last_sync ?? null;
-
-  // Formata para YYYY-MM-DDTHH:mm:ss
-  const lastSyncServer = lastSyncServerRaw
-    ? format(parseISO(lastSyncServerRaw), "yyyy-MM-dd HH:mm:ss")
-    : null;
-
-
-
+  const produtosRemotos: ProdutoAPI[] = Array.isArray(dados?.produtos) ? dados.produtos : [];
+  const lastSyncServer = dados?.last_sync ? format(parseISO(dados.last_sync), "yyyy-MM-dd HH:mm:ss") : null;
 
   console.log("⏱ last_sync recebido do servidor:", lastSyncServer);
+  console.log("🌐 Produtos recebidos da API:", produtosRemotos.length);
 
+  // Contadores
+  let inseridos = 0;
+  let atualizados = 0;
+  let ignorados = 0;
 
-  console.log("🌐 Produtos recebidos da API:", produtosRemotos.length ?? 0);
-
-  // 3) buscar locais
-  const locais = await database.getAllAsync<ProdutoLocal>("SELECT * FROM cadproduto");
-  const mapaLocais = new Map(locais.map(p => [`${p.empresa}-${p.codigo}`, p]));
-
-  // contadores
-  let totalInseridos = 0;
-  let totalAtualizados = 0;
-  let totalIgnorados = 0;
-
-  // helpers (sem undefined)
-  const sanitizarNumero = (valor: any, fallback = 0): number => {
+  // Funções auxiliares
+  const sanitizarNumero = (valor: any, fallback = 0) => {
     const n = Number(valor);
     return Number.isFinite(n) ? n : fallback;
   };
-  const formatarDataRegistro = (valor?: string): string => {
-    if (!valor) return "";
-    const d = new Date(valor);
-    return isNaN(d.getTime()) ? "" : d.toISOString();
-  };
+  const formatarData = (valor?: string) => valor ? format(new Date(valor), "yyyy-MM-dd HH:mm:ss") : "";
 
-  // 4) se API não retornou nada => conta como ignorados os locais (mesmo padrão do vendedor)
-  if (!produtosRemotos || produtosRemotos.length === 0) {
-    totalIgnorados = locais.length;
-    if (lastSyncServer) await salvarConfig("last_sync_produtos", lastSyncServer);
-
-    const totalProcessados = 0; // nenhum remoto para processar
-    console.log(`🏁 Produtos: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
-    return {
-      inseridos: totalInseridos,
-      atualizados: totalAtualizados,
-      ignorados: totalIgnorados,
-      totalProcessados,
-      lastSync: lastSyncServer
-    };
-  }
-
-  // 5) filtrar válidos (empresa+codigo); os inválidos entram como ignorados
+  // Filtra produtos válidos
   const produtosValidos = produtosRemotos.filter(p => p.empresa != null && p.codigo != null);
-  const descartadosChave = produtosRemotos.length - produtosValidos.length;
-  if (descartadosChave > 0) {
-    console.warn(`⚠️ Itens descartados por falta de chave (empresa/codigo): ${descartadosChave}`);
-    totalIgnorados += descartadosChave;
+  if (produtosRemotos.length !== produtosValidos.length) {
+    console.warn(`⚠️ Produtos descartados por falta de chave (empresa/codigo): ${produtosRemotos.length - produtosValidos.length}`);
   }
 
-  // 6) diferença de dados
   const dadosDiferentes = (novo: ProdutoLocal, atual?: ProdutoLocal) => {
     if (!atual) return true;
-
-    const camposNumericos: (keyof ProdutoLocal)[] = [
-      "peso", "precovenda", "percentualdesconto", "estoque", "percentualComissao", "versao", "imagens"
-    ];
-    const camposTexto: (keyof ProdutoLocal)[] = [
-      "descricao", "unidadeMedida", "codigobarra", "agrupamento",
-      "marca", "modelo", "tamanho", "cor", "casasdecimais",
-      "reajustacondicaopagamento", "situacaoregistro", "dataregistro"
-    ];
-
-    for (const c of camposNumericos) {
-      const a = sanitizarNumero((atual as any)[c]);
-      const b = sanitizarNumero((novo as any)[c]);
-      if (a !== b) return true;
-    }
-    for (const c of camposTexto) {
-      const a = String((atual as any)[c] ?? "").trim();
-      const b = String((novo as any)[c] ?? "").trim();
-      if (a !== b) return true;
-    }
-    return false;
+    const camposNumericos: (keyof ProdutoLocal)[] = ["peso","precovenda","percentualdesconto","estoque","percentualComissao","versao","imagens"];
+    const camposTexto: (keyof ProdutoLocal)[] = ["descricao","unidadeMedida","codigobarra","agrupamento","marca","modelo","tamanho","cor","casasdecimais","reajustacondicaopagamento","situacaoregistro","dataregistro"];
+    return camposNumericos.some(c => sanitizarNumero(novo[c]) !== sanitizarNumero(atual[c])) ||
+           camposTexto.some(c => String(novo[c] ?? "").trim() !== String(atual[c] ?? "").trim());
   };
 
-  // 7) transação de upsert
+  // Upsert em transação
   await database.withTransactionAsync(async () => {
     for (const r of produtosValidos) {
       try {
@@ -279,27 +235,27 @@ async function sincronizarProdutos(): Promise<{
           empresa: r.empresa!,
           codigo: r.codigo!,
           descricao: r.descricao ?? "",
-          unidadeMedida: r.unidadeMedida ?? r.unidademedida ?? "",
-          codigobarra: r.codigoBarra ?? r.codigobarra ?? "",
+          unidadeMedida: r.unidadeMedida ?? "",
+          codigobarra: r.codigobarra ?? "",
           agrupamento: r.agrupamento ?? "",
           marca: r.marca ?? "",
           modelo: r.modelo ?? "",
           tamanho: r.tamanho ?? "",
           cor: r.cor ?? "",
           peso: sanitizarNumero(r.peso),
-          precovenda: sanitizarNumero(r.precoVenda ?? r.precovenda),
+          precovenda: sanitizarNumero(r.precovenda),
           casasdecimais: String(r.casasdecimais ?? "0"),
-          percentualdesconto: sanitizarNumero(r.percentualDesconto ?? r.percentualdesconto),
+          percentualdesconto: sanitizarNumero(r.percentualdesconto),
           estoque: sanitizarNumero(r.estoque),
-          reajustacondicaopagamento: r.reajustaCondicaoPagamento ?? r.reajustacondicaopagamento ?? "",
-          percentualComissao: sanitizarNumero(r.percentualComissao ?? r.percentualcomissao),
-          situacaoregistro: r.situacaoRegistro ?? r.situacaoregistro ?? "",
-          dataregistro: formatarDataRegistro(r.dataRegistro ?? r.dataregistro),
+          reajustacondicaopagamento: r.reajustacondicaopagamento ?? "N",
+          percentualComissao: sanitizarNumero(r.percentualComissao),
+          situacaoregistro: r.situacaoregistro ?? "A",
+          dataregistro: formatarData(r.dataRegistro),
           versao: sanitizarNumero(r.versao),
           imagens: sanitizarNumero(r.imagens),
         };
 
-        const chave = `${produto.empresa}-${produto.codigo}`;
+        const chave = `${produto.empresa}-${produto.codigo}`.trim().toLowerCase();
         const atual = mapaLocais.get(chave);
 
         if (!atual) {
@@ -309,93 +265,58 @@ async function sincronizarProdutos(): Promise<{
               agrupamento, marca, modelo, tamanho, cor, peso, precovenda,
               casasdecimais, percentualdesconto, estoque, reajustacondicaopagamento,
               percentualComissao, situacaoregistro, dataregistro, versao, imagens
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-              String(produto.empresa),
-              String(produto.codigo),
-              produto.descricao,
-              produto.unidadeMedida,
-              produto.codigobarra,
-              produto.agrupamento,
-              produto.marca,
-              produto.modelo,
-              produto.tamanho,
-              produto.cor,
-              produto.peso,
-              produto.precovenda,
-              produto.casasdecimais,
-              produto.percentualdesconto,
-              produto.estoque,
-              produto.reajustacondicaopagamento,
-              produto.percentualComissao,
-              produto.situacaoregistro,
-              produto.dataregistro,
-              produto.versao,
-              produto.imagens
-            ]
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            Object.values(produto)
           );
-          totalInseridos++;
+          inseridos++;
         } else if (dadosDiferentes(produto, atual)) {
           await database.runAsync(
             `UPDATE cadproduto SET
-              descricao = ?, unidadeMedida = ?, codigobarra = ?, agrupamento = ?,
-              marca = ?, modelo = ?, tamanho = ?, cor = ?, peso = ?, precovenda = ?,
-              casasdecimais = ?, percentualdesconto = ?, estoque = ?, reajustacondicaopagamento = ?,
-              percentualComissao = ?, situacaoregistro = ?, dataregistro = ?, versao = ?, imagens = ?
-            WHERE empresa = ? AND codigo = ?`,
+              descricao=?, unidadeMedida=?, codigobarra=?, agrupamento=?, marca=?,
+              modelo=?, tamanho=?, cor=?, peso=?, precovenda=?, casasdecimais=?,
+              percentualdesconto=?, estoque=?, reajustacondicaopagamento=?,
+              percentualComissao=?, situacaoregistro=?, dataregistro=?, versao=?, imagens=?
+             WHERE empresa=? AND codigo=?`,
             [
-              produto.descricao,
-              produto.unidadeMedida,
-              produto.codigobarra,
-              produto.agrupamento,
-              produto.marca,
-              produto.modelo,
-              produto.tamanho,
-              produto.cor,
-              produto.peso,
-              produto.precovenda,
-              produto.casasdecimais,
-              produto.percentualdesconto,
-              produto.estoque,
-              produto.reajustacondicaopagamento,
-              produto.percentualComissao,
-              produto.situacaoregistro,
-              produto.dataregistro,
-              produto.versao,
-              produto.imagens,
-              String(produto.empresa),
-              String(produto.codigo)
+              produto.descricao, produto.unidadeMedida, produto.codigobarra, produto.agrupamento, produto.marca,
+              produto.modelo, produto.tamanho, produto.cor, produto.peso, produto.precovenda, produto.casasdecimais,
+              produto.percentualdesconto, produto.estoque, produto.reajustacondicaopagamento,
+              produto.percentualComissao, produto.situacaoregistro, produto.dataregistro, produto.versao, produto.imagens,
+              produto.empresa, produto.codigo
             ]
           );
-          totalAtualizados++;
+          atualizados++;
         } else {
-          totalIgnorados++;
+          ignorados++;
         }
       } catch (err) {
         console.error(`❌ Erro ao processar produto ${r.codigo}:`, err);
-        totalIgnorados++;
+        ignorados++;
       }
     }
   });
 
-  // 8) persiste last_sync do servidor
-  if (lastSyncServer) {
+  // Atualiza last_sync apenas se houver produtos processados
+  if (lastSyncServer && produtosValidos.length > 0) {
     await salvarConfig("last_sync_produtos", lastSyncServer);
     console.log("⏱ last_sync atualizado para:", lastSyncServer);
+  } else {
+    console.log("⏱ Nenhum produto processado, last_sync não atualizado");
   }
 
-  // 9) totais finais (mesmo padrão do vendedor/cliente)
-  const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
-  console.log(`🏁 Produtos: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
+  // Total no banco
+  const totalNoBanco = await database.getFirstAsync<{ total: number }>("SELECT COUNT(*) as total FROM cadproduto");
 
-  return {
-    inseridos: totalInseridos,
-    atualizados: totalAtualizados,
-    ignorados: totalIgnorados,
-    totalProcessados,
-    lastSync: lastSyncServer
-  };
+  const totalProcessados = inseridos + atualizados + ignorados;
+  console.log(`🏁 Produtos no banco: ${totalNoBanco?.total}, Inseridos=${inseridos}, Atualizados=${atualizados}, Ignorados=${ignorados}`);
+
+  return { totalNoBanco: totalNoBanco?.total ?? locais.length, inseridos, atualizados, ignorados, totalProcessados, lastSync: lastSyncServer };
 }
+
+
+
+
+
 
 
 
@@ -423,8 +344,10 @@ async function processarComLimite<T>(tarefas: (() => Promise<T>)[], limite: numb
   return resultados;
 }
 
-// Função principal de sincronização
-async function sincronizarImagens(): Promise<{ novas: number; atualizadas: number; total: number }> {
+type ProgressCallback = (baixadas: number, total: number) => void;
+
+// Função principal de sincronização com callback opcional
+async function sincronizarImagens(onProgress?: ProgressCallback): Promise<{ novas: number; atualizadas: number; total: number }> {
   let novas = 0;
   let atualizadas = 0;
 
@@ -440,6 +363,8 @@ async function sincronizarImagens(): Promise<{ novas: number; atualizadas: numbe
     const response = await api.get<{ imagens: { url: string; mtime: number }[] }>("lista/imagem");
     const arquivos = response.data.imagens;
 
+    let baixadas = 0; // contador de progresso
+
     // Cria tarefas de download/atualização
     const tarefas = arquivos.map((arquivo) => async () => {
       const nomeArquivo = arquivo.url.split("/").pop();
@@ -447,16 +372,22 @@ async function sincronizarImagens(): Promise<{ novas: number; atualizadas: numbe
 
       const mtimeLocal = await getArquivoLocalMtime(nomeArquivo);
 
+      let precisaAtualizar = false;
+
       if (!mtimeLocal) {
         await baixarImagem(arquivo.url, nomeArquivo);
         novas++;
+        precisaAtualizar = true;
       } else if (mtimeLocal < arquivo.mtime) {
         await baixarImagem(arquivo.url, nomeArquivo);
         atualizadas++;
+        precisaAtualizar = true;
       }
 
-      if (!mtimeLocal || mtimeLocal < arquivo.mtime) {
+      if (precisaAtualizar) {
         await setArquivoLocalMtime(nomeArquivo, arquivo.mtime);
+        baixadas++;
+        if (onProgress) onProgress(baixadas, arquivos.length); // dispara o callback
       }
 
       return true;
@@ -465,14 +396,7 @@ async function sincronizarImagens(): Promise<{ novas: number; atualizadas: numbe
     // Executa downloads com limite de 5 simultâneos
     await processarComLimite(tarefas, 5);
 
-    // Conta **todas** as imagens que existem na pasta local após sincronização
-    let arquivosLocais: string[] = [];
-    try {
-      arquivosLocais = await FileSystem.readDirectoryAsync(pastaImagens);
-    } catch {
-      arquivosLocais = [];
-    }
-
+    // Conta todas as imagens que existem na pasta local após sincronização
     const total = await contarImagensNoDispositivo();
 
     console.log(`🆕 Novas: ${novas}, 🔄 Atualizadas: ${atualizadas}, 📦 Total: ${total}`);
@@ -483,6 +407,7 @@ async function sincronizarImagens(): Promise<{ novas: number; atualizadas: numbe
     return { novas: 0, atualizadas: 0, total: 0 };
   }
 }
+
 
 
 // ***********************Inicio da função de sincronização das imagens **************************
@@ -875,13 +800,20 @@ async function sincronizarClientes() {
   if (!database) throw new Error("Database não disponível para sincronização de CLIENTE");
 
   try {
-    // 1️⃣ Recupera última sincronização
-    const lastSyncLocal = await carregarConfig("last_sync_clientes");
+    // 1️⃣ Busca clientes já existentes
+    const locais = await database.getAllAsync<ClienteAPI>("SELECT * FROM cadcliente");
+    const mapaLocais = new Map(locais.map(c => [`${c.empresa}-${c.codigo}`, c]));
+
+    // 2️⃣ Recupera última sincronização
+    const lastSyncLocal = locais.length > 0 ? await carregarConfig("last_sync_clientes") : null;
     console.log("⏱ Última sincronização local:", lastSyncLocal ?? "—");
 
-    // 2️⃣ Chamada API
-    const url = lastSyncLocal ? `clientes?last_sync=${encodeURIComponent(lastSyncLocal)}` : "clientes";
+    // 3️⃣ Chamada API
+    const url = (!locais.length || !lastSyncLocal)
+      ? "clientes" // força full sync se banco vazio
+      : `clientes?last_sync=${encodeURIComponent(lastSyncLocal)}`;
     console.log("🔗 URL chamada:", api.defaults.baseURL + url);
+
     const response = await tentarRequisicao(() => api.get(url), 3, 1500);
     const dados = response.data;
 
@@ -895,31 +827,27 @@ async function sincronizarClientes() {
       ? format(parseISO(lastSyncServerRaw), "yyyy-MM-dd HH:mm:ss")
       : null;
 
-    // 3️⃣ Busca clientes já existentes
-    const locais = await database.getAllAsync<ClienteAPI>("SELECT * FROM cadcliente");
-    const mapaLocais = new Map(locais.map(c => [`${c.empresa}-${c.codigo}`, c]));
-
+    // 4️⃣ Contadores
     let totalInseridos = 0;
     let totalAtualizados = 0;
     let totalIgnorados = 0;
 
-    // 4️⃣ Se API não retornou nada, ignora todos locais
+    // 5️⃣ Se API não retornou nada, ignora todos locais
     if (!clientesRemotos || clientesRemotos.length === 0) {
       totalIgnorados = locais.length;
-      if (lastSyncServer) await salvarConfig("last_sync_clientes", lastSyncServer);
+      console.log("⚠️ Nenhum cliente retornado do servidor, last_sync não atualizado");
 
       const totalProcessados = 0;
-      console.log(`🏁 Clientes: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
       return {
         inseridos: totalInseridos,
         atualizados: totalAtualizados,
         ignorados: totalIgnorados,
         totalProcessados,
-        lastSync: lastSyncServer
+        lastSync: null
       };
     }
 
-    // 5️⃣ Filtra clientes válidos
+    // 6️⃣ Filtra clientes válidos
     const clientesValidos = clientesRemotos.filter(c => c.empresa != null && c.codigo != null);
     const descartadosChave = clientesRemotos.length - clientesValidos.length;
     if (descartadosChave > 0) {
@@ -927,7 +855,7 @@ async function sincronizarClientes() {
       totalIgnorados += descartadosChave;
     }
 
-    // 6️⃣ Atualiza banco local
+    // 7️⃣ Atualiza banco local
     await database.withTransactionAsync(async () => {
       for (const c of clientesValidos) {
         try {
@@ -1017,9 +945,13 @@ async function sincronizarClientes() {
       }
     });
 
-    // 7️⃣ Atualiza last_sync
-    if (lastSyncServer) await salvarConfig("last_sync_clientes", lastSyncServer);
-    console.log("⏱ last_sync atualizado para:", lastSyncServer);
+    // 8️⃣ Atualiza last_sync apenas se houver clientes retornados
+    if (lastSyncServer && clientesValidos.length > 0) {
+      await salvarConfig("last_sync_clientes", lastSyncServer);
+      console.log("⏱ last_sync atualizado para:", lastSyncServer);
+    } else {
+      console.log("⏱ Nenhum cliente processado, last_sync não atualizado");
+    }
 
     const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
     console.log(`🏁 Clientes: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
@@ -1044,6 +976,7 @@ async function sincronizarClientes() {
 
 
 
+
 // ***********************Inicio da função de sincronização dos cadastros de vendedores **************************
 //----------------------------------------------------------------------------------------------------------------
 interface VendedorLocal {
@@ -1056,19 +989,19 @@ interface VendedorLocal {
   versao: number;
 }
 
-
-
 async function sincronizarVendedores(last_sync?: string) {
   const database = DatabaseManager.getCurrentDatabase();
   if (!database) throw new Error("Database não disponível em sincronização de VENDEDORES");
+
+  let totalInseridos = 0;
+  let totalAtualizados = 0;
+  let totalIgnorados = 0;
 
   // Converte last_sync em Date
   let filtroData: Date | null = null;
   if (last_sync) {
     filtroData = parseISO(last_sync);
-    if (isNaN(filtroData.getTime())) {
-      throw new Error("Formato inválido de last_sync. Use ISO 8601");
-    }
+    if (isNaN(filtroData.getTime())) throw new Error("Formato inválido de last_sync. Use ISO 8601");
   }
 
   // Buscar vendedores da API
@@ -1083,6 +1016,8 @@ async function sincronizarVendedores(last_sync?: string) {
     lastSyncServer = response.data?.last_sync
       ? format(parseISO(response.data.last_sync), "yyyy-MM-dd HH:mm:ss")
       : null;
+
+    console.log("📦 Vendedores recebidos da API:", vendedores.length);
   } catch (err: any) {
     console.error('❌ Erro ao buscar vendedores:', err.message);
     throw err;
@@ -1108,10 +1043,6 @@ async function sincronizarVendedores(last_sync?: string) {
   // Buscar vendedores locais
   const locais = await database.getAllAsync<VendedorLocal>('SELECT * FROM cadvendedor');
   const mapaLocais = new Map(locais.map(v => [`${v.empresa}-${v.codigo}`, v]));
-
-  let totalInseridos = 0;
-  let totalAtualizados = 0;
-  let totalIgnorados = 0;
 
   await database.withTransactionAsync(async () => {
     for (const vendedor of vendedoresValidos) {
@@ -1140,6 +1071,7 @@ async function sincronizarVendedores(last_sync?: string) {
             ]
           );
           totalInseridos++;
+          console.log("✅ Inserido:", vendedor.codigo);
         } else if (dadosDiferentes(vendedor, atual)) {
           await database.runAsync(
             `UPDATE cadvendedor SET codigorota=?, nome=?, situacaoRegistro=?, dataRegistro=?, versao=? 
@@ -1155,8 +1087,10 @@ async function sincronizarVendedores(last_sync?: string) {
             ]
           );
           totalAtualizados++;
+          console.log("ℹ️ Atualizado:", vendedor.codigo);
         } else {
           totalIgnorados++;
+          console.log("ℹ️ Ignorado (sem alterações):", vendedor.codigo);
         }
       } catch (err) {
         console.error(`❌ Erro ao processar vendedor ${vendedor.codigo}:`, err);
@@ -1165,15 +1099,15 @@ async function sincronizarVendedores(last_sync?: string) {
     }
   });
 
-  // Atualiza last_sync local
-  if (lastSyncServer) {
+  // Atualiza last_sync local somente se houver pelo menos 1 registro válido
+  if (lastSyncServer && vendedoresValidos.length > 0) {
     await salvarConfig("last_sync_vendedores", lastSyncServer);
     console.log("⏱ last_sync atualizado para:", lastSyncServer);
   }
 
   const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
 
-  console.log(`🏁 Sincronização finalizada: inseridos=${totalInseridos}, atualizados=${totalAtualizados}, ignorados=${totalIgnorados}, total processados=${totalProcessados}`);
+  console.log(`🏁 Sincronização finalizada: inseridos=${totalInseridos}, atualizados=${totalAtualizados}, ignorados=${totalIgnorados}, total processados=${totalProcessados}, total no banco=${locais.length}`);
 
   return {
     inseridos: totalInseridos,
@@ -1203,6 +1137,24 @@ async function sincronizarCondicoesPagamento(): Promise<{
   let totalAtualizados = 0;
   let totalIgnorados = 0;
 
+  // Função auxiliar para tratar dataRegistro ou last_sync
+  const formatarData = (valor?: string | Date) => {
+    if (!valor) return '';
+    try {
+      const d = valor instanceof Date ? valor : new Date(valor);
+      const YYYY = d.getFullYear();
+      const MM = String(d.getMonth() + 1).padStart(2, '0');
+      const DD = String(d.getDate()).padStart(2, '0');
+      const hh = String(d.getHours()).padStart(2, '0');
+      const mm = String(d.getMinutes()).padStart(2, '0');
+      const ss = String(d.getSeconds()).padStart(2, '0');
+      return `${YYYY}-${MM}-${DD} ${hh}:${mm}:${ss}`;
+    } catch {
+      console.warn("⚠️ data inválida:", valor);
+      return '';
+    }
+  };
+
   // 1️⃣ Recupera last_sync local
   const lastSyncLocal = await carregarConfig("last_sync_condicoes");
   console.log("⏱ Última sincronização local:", lastSyncLocal ?? "—");
@@ -1218,26 +1170,27 @@ async function sincronizarCondicoesPagamento(): Promise<{
   try {
     const response = await tentarRequisicao(() => api.get(url), 3, 2000);
     const dados = response.data;
+
     condicoes = Array.isArray(dados?.condicoes) ? dados.condicoes : (Array.isArray(dados) ? dados : []);
-    lastSyncServer = dados?.last_sync ? format(parseISO(dados.last_sync), "yyyy-MM-dd HH:mm:ss") : null;
-    console.log(`📦 Condições recebidas: ${condicoes.length}`);
+    lastSyncServer = dados?.last_sync ? formatarData(dados.last_sync) : null;
+
+    console.log("📦 Condições recebidas da API:", condicoes.length);
   } catch (error: any) {
-    console.error('❌ Erro ao buscar condições de pagamento:', error.message);
+    console.error("❌ Erro ao buscar condições de pagamento:", error.message);
     return { inseridos: 0, atualizados: 0, ignorados: 0, totalProcessados: 0 };
   }
 
   // 3️⃣ Busca registros locais
-  const locais = await database.getAllAsync<any>('SELECT * FROM cadcondicaopagamento');
+  const locais = await database.getAllAsync<any>("SELECT * FROM cadcondicaopagamento");
   const mapaLocais = new Map(locais.map(c => [`${c.empresa}-${c.codigo}`, c]));
 
   // 4️⃣ Se API não retornou nada => conta todos locais como ignorados
   if (!condicoes || condicoes.length === 0) {
     totalIgnorados = locais.length;
-    if (lastSyncServer) await salvarConfig("last_sync_condicoes", lastSyncServer);
-    console.log(`🏁 Condições: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=0`);
+    console.log(`ℹ️ Nenhuma condição nova. Ignorados=${totalIgnorados}`);
     return {
-      inseridos: totalInseridos,
-      atualizados: totalAtualizados,
+      inseridos: 0,
+      atualizados: 0,
       ignorados: totalIgnorados,
       totalProcessados: 0,
       lastSync: lastSyncServer
@@ -1256,17 +1209,17 @@ async function sincronizarCondicoesPagamento(): Promise<{
   await database.withTransactionAsync(async () => {
     for (const cond of condicoesValidas) {
       try {
-        const chave = `${cond.empresa ?? 0}-${cond.codigo ?? ''}`;
+        const chave = `${cond.empresa}-${cond.codigo}`;
         const registroAtual = mapaLocais.get(chave);
 
         const registro = {
           ...cond,
-          dataRegistro: cond.dataRegistro ? format(parseISO(cond.dataRegistro), "yyyy-MM-dd HH:mm:ss") : ''
+          dataRegistro: formatarData(cond.dataRegistro)
         };
 
         const dadosDiferentes = (novo: any, atual?: any) => {
           if (!atual) return true;
-          const campos = ['descricao', 'acrescimo', 'desconto', 'situacaoRegistro', 'dataRegistro', 'versao'];
+          const campos = ['descricao', 'acrescimo', 'desconto', 'situacaoRegistro', 'dataRegistro'];
           return campos.some(campo => String(novo[campo] ?? '').trim() !== String(atual[campo] ?? '').trim());
         };
 
@@ -1274,42 +1227,42 @@ async function sincronizarCondicoesPagamento(): Promise<{
           await database.runAsync(
             `INSERT INTO cadcondicaopagamento (
               empresa, codigo, descricao, acrescimo, desconto,
-              situacaoRegistro, dataRegistro, versao
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+              situacaoRegistro, dataRegistro
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
             [
-              registro.empresa ?? 0,
-              registro.codigo ?? '',
+              registro.empresa,
+              registro.codigo,
               registro.descricao ?? '',
-              registro.acrescimo ?? 0.0,
-              registro.desconto ?? 0.0,
+              Number(registro.acrescimo ?? 0),
+              Number(registro.desconto ?? 0),
               registro.situacaoRegistro ?? 'I',
-              registro.dataRegistro ?? '',
-              registro.versao ?? 1
+              registro.dataRegistro ?? ''
             ]
           );
           totalInseridos++;
+          console.log("✅ Inserido:", registro.codigo);
         } else if (dadosDiferentes(registro, registroAtual)) {
           await database.runAsync(
             `UPDATE cadcondicaopagamento SET
               descricao=?, acrescimo=?, desconto=?,
-              situacaoRegistro=?, dataRegistro=?, versao=?
+              situacaoRegistro=?, dataRegistro=?
             WHERE empresa=? AND codigo=?`,
             [
               registro.descricao ?? '',
-              registro.acrescimo ?? 0.0,
-              registro.desconto ?? 0.0,
+              Number(registro.acrescimo ?? 0),
+              Number(registro.desconto ?? 0),
               registro.situacaoRegistro ?? 'I',
               registro.dataRegistro ?? '',
-              registro.versao ?? 1,
-              registro.empresa ?? 0,
-              registro.codigo ?? ''
+              registro.empresa,
+              registro.codigo
             ]
           );
           totalAtualizados++;
+          console.log("ℹ️ Atualizado:", registro.codigo);
         } else {
           totalIgnorados++;
+          console.log("ℹ️ Ignorado (sem alterações):", registro.codigo);
         }
-
       } catch (err) {
         console.error(`❌ Erro ao processar condição ${cond.codigo}:`, err);
         totalIgnorados++;
@@ -1317,15 +1270,15 @@ async function sincronizarCondicoesPagamento(): Promise<{
     }
   });
 
-  // 7️⃣ Atualiza last_sync
-  if (lastSyncServer) {
+  // 7️⃣ Atualiza last_sync apenas se houver pelo menos 1 condição válida
+  if (lastSyncServer && condicoesValidas.length > 0) {
     await salvarConfig("last_sync_condicoes", lastSyncServer);
     console.log("⏱ last_sync atualizado para:", lastSyncServer);
   }
 
   // 8️⃣ Totais finais
   const totalProcessados = totalInseridos + totalAtualizados + totalIgnorados;
-  console.log(`🏁 Condições: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}`);
+  console.log(`🏁 Totais: Inseridos=${totalInseridos}, Atualizados=${totalAtualizados}, Ignorados=${totalIgnorados}, Total processados=${totalProcessados}, Total no banco=${locais.length}`);
 
   return {
     inseridos: totalInseridos,
@@ -1335,6 +1288,8 @@ async function sincronizarCondicoesPagamento(): Promise<{
     lastSync: lastSyncServer
   };
 }
+
+
 
 
 

@@ -170,7 +170,21 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
     } = await useSyncEmpresa();
 
     try {
-      await executarSincronizacao('Produtos', sincronizarProdutos, 'Cadastro de produtos sincronizando....', true);
+      await executarSincronizacao('Produtos', async () => {
+        const totalProdutos = await sincronizarProdutos();
+        
+        // Log detalhado
+        adicionarLog(
+          `✅ Produtos sincronizados:\n` +
+          `🆕 Inseridos: ${totalProdutos.inseridos}\n` +
+          `🔄 Atualizados: ${totalProdutos.atualizados}\n` +
+          `⏸️ Ignorados: ${totalProdutos.ignorados}\n` +
+          `📦 Total no banco: ${totalProdutos.totalNoBanco}`
+        );
+
+        return totalProdutos; // mantém totalNoBanco disponível para o painel
+      }, 'Cadastro de produtos sincronizando....', true);
+
       await executarSincronizacao('Clientes', sincronizarClientes, 'Cadastro de clientes sincronizando....', true);
       await executarSincronizacao('Parâmetros', sincronizarParametros, 'Cadastro de parâmetros sincronizando....', false);
       await executarSincronizacao('Formas de Pagamento', sincronizarCondicoesPagamento, 'Cadastro de forma de pgtos sincronizando....', false);
