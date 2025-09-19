@@ -20,6 +20,8 @@ import { useSyncEmpresa } from '../database/sincronizacao';
 import { useDatabaseStore } from '../store/databasestore';
 import { adicionarValor } from '../scripts/adicionarourecuperar';
 import { gerarHashSenhaExpo, validarSenhaExpo } from '../scripts/funcoes';
+import Constants from 'expo-constants';
+
 
 type Empresa = {
   codigo: string;
@@ -49,6 +51,8 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
   const [erroUsuario, setErroUsuario] = useState('');
   const [erroSenha, setErroSenha] = useState('');
   const [loginError, setLoginError] = useState('');
+  const numeroVersao = Constants.expoConfig?.version || '1.0.0';
+  const buildNumber = Constants.expoConfig?.ios?.buildNumber || Constants.expoConfig?.android?.versionCode || '1';
 
   async function buscarUsuario(
     cpfCnpj: string,
@@ -82,6 +86,8 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
 
         if (empresas && empresas.length > 0) {
           empresaObj = empresas[0];
+          await sync.sincronizarUsuarios();
+          await sync.sincronizarVendedores();
           console.log('✅ Empresa encontrada localmente.');
         }
       }
@@ -173,6 +179,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
   try {
     const { validarUsuarioLocal, sincronizarUsuarios, sincronizarVendedores } = await useSyncEmpresa();
 
+
     // 🔠 Converte usuário e senha para maiúsculas apenas na validação
     const usuarioUpper = username.trim().toUpperCase();
     const senhaUpper = password.trim().toUpperCase();
@@ -189,10 +196,10 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
       setLoginError('Usuário ou senha inválidos.');
       Vibration.vibrate(500);
       setTimeout(() => setLoginError(''), 3000);
-    //  await sincronizarUsuarios();
-    //  await sincronizarVendedores();
+      
       return;
     }
+ 
 
     const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
     await adicionarValor('@IDUSER', resultado.id?.toString() || '0');
@@ -246,6 +253,11 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     <View style={styles.container}>
       {!usuarioEncontrado ? (
         <>
+          <View style={{ alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ fontSize: 12, color: '#888' }}>
+             Versão {numeroVersao} (Build {buildNumber})
+            </Text>
+          </View>
           <Text style={styles.fraseReflexiva}>
             Uma pessoa erra, todos erram.  
             Se uma pessoa acerta, nem todos estão certos.

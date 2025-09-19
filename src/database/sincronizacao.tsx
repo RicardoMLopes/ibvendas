@@ -2148,7 +2148,7 @@ async function sincronizarUsuarios() {
             }
           }
         } catch (err: any) {
-          console.error('❌ Erro ao processar usuário:', user.usuario, err.message);
+          console.log('❌ Erro ao processar usuário:', user.usuario, err.message);
         }
       }
     });
@@ -2158,7 +2158,7 @@ async function sincronizarUsuarios() {
     console.log(`🔄 Atualizados: ${totalAtualizados}`);
   } catch (error: any) {
     console.error('❌ Falha na sincronização de usuários:', error.message);
-    throw new Error('Falha na sincronização de usuários');
+    // throw new Error('Falha na sincronização de usuários');
   }
 }
 
