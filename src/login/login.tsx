@@ -10,18 +10,18 @@ import {
   Vibration,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import * as Network from 'expo-network';
+
 import api from '../config/app';
 import Configs from '../config/configs';
 import styles from './style';
 import { salvarTokenCNPJ } from '../config/tokenmanager';
 import DatabaseManager from '../database/databasemanager';
-//import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useSyncEmpresa } from '../database/sincronizacao';
 import { useDatabaseStore } from '../store/databasestore';
 import { adicionarValor } from '../scripts/adicionarourecuperar';
-import { gerarHashSenhaExpo, validarSenhaExpo } from '../scripts/funcoes';
+import { validarSenhaExpo } from '../scripts/funcoes';
 import Constants from 'expo-constants';
-
 
 type Empresa = {
   codigo: string;
@@ -31,11 +31,8 @@ type Empresa = {
 
 const formatarDocumento = (doc: string) => {
   const clean = doc.replace(/\D/g, '');
-  if (clean.length === 11) {
-    return clean.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
-  } else if (clean.length === 14) {
-    return clean.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
-  }
+  if (clean.length === 11) return clean.replace(/(\d{3})(\d{3})(\d{3})(\d{2})/, '$1.$2.$3-$4');
+  if (clean.length === 14) return clean.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/, '$1.$2.$3/$4-$5');
   return doc;
 };
 
@@ -67,8 +64,8 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
     const documento = formatarDocumento(cpfCnpj);
 
+    setLoading(true);
     try {
-      setLoading(true);
       const hash = await salvarTokenCNPJ(cnpjLimpo, Configs.SECRET_KEY);
       console.log('🔐 Hash gerado:', hash);
 
@@ -77,37 +74,36 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
 
       if (baseExiste) {
         const baseAtual = useDatabaseStore.getState().baseAtual;
-        if (baseAtual !== `${cnpjLimpo}.db`) {
-          await DatabaseManager.openDatabase(cnpjLimpo);
-        }
+        if (baseAtual !== `${cnpjLimpo}.db`) await DatabaseManager.openDatabase(cnpjLimpo);
 
+        // Cria o objeto sync uma vez
         const sync = await useSyncEmpresa();
         const empresas = await sync.ConsultarEmpresa(documento);
 
         if (empresas && empresas.length > 0) {
           empresaObj = empresas[0];
-          await sync.sincronizarUsuarios();
-          await sync.sincronizarVendedores();
           console.log('✅ Empresa encontrada localmente.');
-        }
-      }
 
-      if (!empresaObj) {
-        console.log('🌐 Tentando buscar empresa remotamente...');
-        const empresaRemota = await buscaRemota(cnpjLimpo);
-        if (empresaRemota) {
-          empresaObj = empresaRemota;
-        } else {
-          throw new Error('Empresa não encontrada localmente nem remotamente.');
-        }
-      }
+          // Sincronização só se houver internet
+          const networkState = await Network.getNetworkStateAsync();
+          if (networkState.isConnected && networkState.isInternetReachable) {
+            try {
+              await sync.sincronizarUsuarios();
+              await sync.sincronizarVendedores();
+              console.log('✅ Usuários e vendedores sincronizados com a internet.');
+            } catch (err) {
+              console.log('⚠️ Erro ao sincronizar usuários/vendedores:', err);
+            }
+          } else {
+            console.log('⚠️ Sem internet, sincronização de usuários/vendedores pulada.');
+          }
 
-      if (empresaObj) {
-        setEmpresa(empresaObj.nome);
-        setEmpresaCodigo(Number(empresaObj.codigo));
-        setCpfCnpj(empresaObj.cnpj || cpfCnpj);
-        setUsuarioEncontrado(true);
-        console.log('✅ Empresa pronta para uso:', empresaObj.nome);
+          setEmpresa(empresaObj.nome);
+          setEmpresaCodigo(Number(empresaObj.codigo));
+          setCpfCnpj(empresaObj.cnpj || cpfCnpj);
+          setUsuarioEncontrado(true);
+          console.log('✅ Empresa pronta para uso:', empresaObj.nome);
+        }
       }
     } catch (error: any) {
       console.log('❌ Erro na busca da empresa:', error.message || error);
@@ -121,104 +117,67 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     }
   }
 
-  async function buscaRemota(cnpj: string): Promise<Empresa | null> {
-    try {
-      const response = await api.get(`/empresa/`);
-      if (response.data && response.data.cnpj) {
-        console.log('🔍 Empresa encontrada via API:', response.data.nome);
-
-        await DatabaseManager.openDatabase(cnpj);
-        const sync = await useSyncEmpresa();
-        await sync.sincronizarEmpresas();
-        await sync.sincronizarUsuarios();
-        await sync.sincronizarVendedores();
-
-        return {
-          cnpj: response.data.cnpj,
-          nome: response.data.nome,
-          codigo: response.data.codigo,
-        };
-      } else {
-        console.log('⚠️ API não retornou empresa.');
-        return null;
-      }
-    } catch (error) {
-      console.log('❌ Erro na busca remota:', error);
-      return null;
-    }
-  }
-
   const realizarLogin = async () => {
-  // Reset das mensagens
-  setErroUsuario('');
-  setErroSenha('');
-  setLoginError('');
+    setErroUsuario('');
+    setErroSenha('');
+    setLoginError('');
 
-  if (!username.trim()) {
-    setErroUsuario('Preencha o usuário!');
-    Vibration.vibrate(500);
-    setTimeout(() => setErroUsuario(''), 3000);
-    return;
-  }
-
-  if (!password.trim()) {
-    setErroSenha('Preencha a senha!');
-    Vibration.vibrate(500);
-    setTimeout(() => setErroSenha(''), 3000);
-    return;
-  }
-
-  if (!usuarioEncontrado) {
-    setLoginError('Usuário não identificado.');
-    Vibration.vibrate(500);
-    setTimeout(() => setLoginError(''), 3000);
-    return;
-  }
-
-  setLoading(true);
-  try {
-    const { validarUsuarioLocal, sincronizarUsuarios, sincronizarVendedores } = await useSyncEmpresa();
-
-
-    // 🔠 Converte usuário e senha para maiúsculas apenas na validação
-    const usuarioUpper = username.trim().toUpperCase();
-    const senhaUpper = password.trim().toUpperCase();
-
-    const resultado = await validarUsuarioLocal(codigoempresa, usuarioUpper);
-
-    const senhaParaValidar = (resultado.novaSenha && resultado.novaSenha.trim() !== '')
-      ? resultado.novaSenha
-      : (resultado.senhaantiga ?? '');
-
-    const senhaCorreta = await validarSenhaExpo(senhaUpper, senhaParaValidar);
-
-    if (!senhaCorreta) {
-      setLoginError('Usuário ou senha inválidos.');
+    if (!username.trim()) {
+      setErroUsuario('Preencha o usuário!');
       Vibration.vibrate(500);
-      setTimeout(() => setLoginError(''), 3000);
-      
+      setTimeout(() => setErroUsuario(''), 3000);
       return;
     }
- 
 
-    const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
-    await adicionarValor('@IDUSER', resultado.id?.toString() || '0');
-    await adicionarValor('@CNPJ', cnpjLimpo);
-    await adicionarValor('@empresa', codigoempresa.toString());
-    await adicionarValor('@nomeEmpresa', empresa);
-    await adicionarValor('@usuario', usuarioUpper);
+    if (!password.trim()) {
+      setErroSenha('Preencha a senha!');
+      Vibration.vibrate(500);
+      setTimeout(() => setErroSenha(''), 3000);
+      return;
+    }
 
-    onLoginSuccess(cnpjLimpo);
-    navigation.navigate({ name: 'home', params: { cnpj: cnpjLimpo } });
-  } catch (error) {
-    setLoginError('Erro ao acessar banco local.');
-    Vibration.vibrate(500);
-    setTimeout(() => setLoginError(''), 3000);
-    console.log('Erro ao validar login local:', error);
-  } finally {
-    setLoading(false);
-  }
-};
+    if (!usuarioEncontrado) {
+      setLoginError('Usuário não identificado.');
+      Vibration.vibrate(500);
+      setTimeout(() => setLoginError(''), 3000);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const { validarUsuarioLocal } = await useSyncEmpresa();
+      const usuarioUpper = username.trim().toUpperCase();
+      const senhaUpper = password.trim().toUpperCase();
+
+      const resultado = await validarUsuarioLocal(codigoempresa, usuarioUpper);
+      const senhaParaValidar = resultado.novaSenha?.trim() || resultado.senhaantiga || '';
+      const senhaCorreta = await validarSenhaExpo(senhaUpper, senhaParaValidar);
+
+      if (!senhaCorreta) {
+        setLoginError('Usuário ou senha inválidos.');
+        Vibration.vibrate(500);
+        setTimeout(() => setLoginError(''), 3000);
+        return;
+      }
+
+      const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
+      await adicionarValor('@IDUSER', resultado.id?.toString() || '0');
+      await adicionarValor('@CNPJ', cnpjLimpo);
+      await adicionarValor('@empresa', codigoempresa.toString());
+      await adicionarValor('@nomeEmpresa', empresa);
+      await adicionarValor('@usuario', usuarioUpper);
+
+      onLoginSuccess(cnpjLimpo);
+      navigation.navigate({ name: 'home', params: { cnpj: cnpjLimpo } });
+    } catch (error) {
+      setLoginError('Erro ao acessar banco local.');
+      Vibration.vibrate(500);
+      setTimeout(() => setLoginError(''), 3000);
+      console.log('Erro ao validar login local:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const limpar = () => {
     setCpfCnpj('');
@@ -231,19 +190,6 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     setErroSenha('');
     setLoginError('');
   };
-  
-{/* ROtina parado, não esta sendo usado no momento.  
-  function GerarCatalago(): void {
-    const url = 'http://192.168.100.40:8000/';
-    Linking.canOpenURL(url)
-      .then((supported) => {
-        if (supported) Linking.openURL(url);
-        else Alert.alert('Erro', 'Não foi possível abrir o link.');
-      })
-      .catch(() => Alert.alert('Erro', 'Ocorreu um erro ao tentar abrir o link.'));
-  }
-
-*/}
 
   const handleBlurBuscar = () => {
     buscarUsuario(cpfCnpj, setEmpresa, setEmpresaCodigo, setCpfCnpj, setUsuarioEncontrado, setLoading);
@@ -267,11 +213,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
           <TextInput
             style={styles.campoDocumento}
             value={cpfCnpj}
-            onChangeText={(text) => {
-              // Remove qualquer caractere que não seja número
-              const onlyNumbers = text.replace(/[^0-9]/g, '');
-              setCpfCnpj(onlyNumbers);
-            }}
+            onChangeText={(text) => setCpfCnpj(text.replace(/[^0-9]/g, ''))}
             keyboardType="numeric"
             placeholder="Digite CPF ou CNPJ"
             maxLength={14}
@@ -320,15 +262,10 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
             onPress={realizarLogin}
             disabled={loading}
           >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.buttonText}>Entrar</Text>
-            )}
+            {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Entrar</Text>}
           </TouchableOpacity>
 
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>          
-
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 10 }}>
             <TouchableOpacity onPress={() => Linking.openURL('https://smv.inf.br/cadusuarios/')}>
               <Text style={{ color: 'blue', fontWeight: 'bold' }}>Cadastrar usuário</Text>
             </TouchableOpacity>

@@ -8,11 +8,8 @@ import { adicionarValor, recuperarValor } from '../scripts/adicionarourecuperar'
 import SyncLogPanel from '../logs/logssincronizacao';
 import AnimatedMessage from './animatemensage';
 import { useNavigation } from '@react-navigation/native';
-import {getCatalogoPDF} from '../produto/catalogo';
-import * as Sharing from 'expo-sharing';
-
-
-
+import { getCatalogoPDF } from '../produto/catalogo';
+import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 
 type RootStackParamList = {
   home: { cnpj: string };
@@ -63,7 +60,6 @@ const LoadingOverlay: React.FC<{ message: string }> = ({ message }) => {
   const [fadeAnim] = useState(new Animated.Value(0));
 
   useEffect(() => {
-
     Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }).start();
   }, []);
 
@@ -83,22 +79,20 @@ const LoadingOverlay: React.FC<{ message: string }> = ({ message }) => {
 const Home: React.FC<Props> = ({ route, navigation }) => {
   const [mensagem, setMensagem] = useState('');
   const [loading, setLoading] = useState(false);
-  const [nomeEmpresa, setNomeEmpresa] = useState('Minha Empresa LTDA'); 
+  const [nomeEmpresa, setNomeEmpresa] = useState('Minha Empresa LTDA');
   const [syncLogs, setSyncLogs] = useState<string[]>([]);
   const [showLog, setShowLog] = useState(false);
   const [totaisSincronizacao, setTotaisSincronizacao] = useState<Record<string, any>>({});
+  const [semInternet, setSemInternet] = useState(false);
+
   const navigations = useNavigation<any>();
-
-  const cnpj = route.params?.cnpj || ''; // Use o CNPJ passado pela rota ou um padrão
-
-
+  const cnpj = route.params?.cnpj || '';
 
   useEffect(() => {
     async function carregarNomeEmpresa() {
       try {
         const { buscarVendedorDoUsuario } = await useSyncEmpresa();
         const usuarioId = await recuperarValor('@IDUSER');
-        
         const resultado = await buscarVendedorDoUsuario(Number(usuarioId));
         adicionarValor('@CodigoVendedor', resultado!.codigo!.toString());
         adicionarValor('@Vendedor', resultado!.nome!.toString());
@@ -116,6 +110,15 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
     setSyncLogs(prev => [...prev, mensagem]);
   }
 
+  async function verificarInternet(): Promise<boolean> {
+    try {
+      const response = await fetch('https://www.google.com', { method: 'HEAD', cache: 'no-cache' });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   async function executarSincronizacao<T>(
     nome: string,
     func: () => Promise<T>,
@@ -128,7 +131,6 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
     try {
       const resultado = retry ? await retryWithBackoff(func) : await func();
 
-      // normaliza para objeto compatível com SyncLogPanel
       let totalObj: any = {};
       if (resultado && typeof resultado === 'object' && 'totalProcessados' in resultado) {
         totalObj = resultado as any;
@@ -147,18 +149,26 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
       return resultado;
     } catch (error: any) {
       adicionarLog(`❌ Falha na sincronização de ${nome}: ${error?.message || 'Erro desconhecido'}`);
-      setMensagem(`Falha ao sincronizar ${nome}. Tente novamente mais tarde.`);
+      setMensagem(`Falha ao sincronizar ${nome}.`);
       setLoading(false);
       throw error;
     }
   }
 
   async function RodarZincronizacao() {
+    const conectado = await verificarInternet();
+    if (!conectado) {
+      setSemInternet(true);
+      setTimeout(() => setSemInternet(false), 3000); // desaparece após 3s
+      return;
+    }
+
     setLoading(true);
     setMensagem('');
     setSyncLogs([]);
     setShowLog(false);
     setTotaisSincronizacao({});
+    setSemInternet(false);
 
     const {
       sincronizarProdutos,
@@ -172,8 +182,6 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
     try {
       await executarSincronizacao('Produtos', async () => {
         const totalProdutos = await sincronizarProdutos();
-        
-        // Log detalhado
         adicionarLog(
           `✅ Produtos sincronizados:\n` +
           `🆕 Inseridos: ${totalProdutos.inseridos}\n` +
@@ -181,8 +189,7 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
           `⏸️ Ignorados: ${totalProdutos.ignorados}\n` +
           `📦 Total no banco: ${totalProdutos.totalNoBanco}`
         );
-
-        return totalProdutos; // mantém totalNoBanco disponível para o painel
+        return totalProdutos;
       }, 'Cadastro de produtos sincronizando....', true);
 
       await executarSincronizacao('Clientes', sincronizarClientes, 'Cadastro de clientes sincronizando....', true);
@@ -204,6 +211,22 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
     <View style={styles.container}>
       {!loading && <Text style={styles.mainTitle}>{nomeEmpresa}</Text>}
 
+      {/* Mensagem de sem internet */}
+      {semInternet && (
+        <View style={{
+          position: 'absolute', top: '40%', left: 20, right: 20,
+          padding: 20, backgroundColor: '#FFF3F3', borderRadius: 12, alignItems: 'center',
+          shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25,
+          shadowRadius: 3.84, elevation: 5,
+          zIndex: 100
+        }}>
+          <MaterialCommunityIcons name="wifi-off" size={50} color="#FF4C4C" />
+          <Text style={{ marginTop: 10, fontSize: 16, fontWeight: '600', color: '#FF4C4C', textAlign: 'center' }}>
+            Sem conexão com a internet
+          </Text>
+        </View>
+      )}
+
       {loading && (
         <View style={overlayStyles.animatedMessageOverlay}>
           <AnimatedMessage message="Vamos tomar um café? Uma pausa saborosa que faz toda a diferença!" />
@@ -215,9 +238,10 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
       {!loading && (
         <>
           <View style={styles.optionsContainer}>
+            {/* Seus botões de navegação e sincronização */}
             <TouchableOpacity
               style={styles.option}
-              onPress={() => navigation.navigate('listarcliente', {selecionarHabilitado: true})}
+              onPress={() => navigation.navigate('listarcliente', { selecionarHabilitado: true })}
             >
               <Image source={require('./../../assets/novo_pedido.png')} style={styles.icon} />
               <Text style={styles.optionText}>Novo Pedido</Text>
@@ -230,7 +254,6 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
               <Image source={require('./../../assets/gerar_pedidos.png')} style={styles.icon} />
               <Text style={styles.optionText}>Ger. Pedidos</Text>
             </TouchableOpacity>
-            
 
             <TouchableOpacity
               style={styles.option}
@@ -259,11 +282,10 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
               <Image source={require('./../../assets/Produtos.png')} style={styles.icon} />
               <Text style={styles.optionText}>Produtos</Text>
             </TouchableOpacity>
+
             <TouchableOpacity
               style={styles.option}
-              onPress={async () => {
-                await getCatalogoPDF(); // função já trata compartilhamento
-              }}
+              onPress={async () => await getCatalogoPDF()}
             >
               <Image source={require('./../../assets/catalogo.png')} style={styles.icon} />
               <Text style={styles.optionText}>Abrir Catálogo</Text>
@@ -271,14 +293,11 @@ const Home: React.FC<Props> = ({ route, navigation }) => {
 
             <TouchableOpacity
               style={styles.option}
-              onPress={() => navigation.navigate('listarcliente', {selecionarHabilitado: false})}
+              onPress={() => navigation.navigate('listarcliente', { selecionarHabilitado: false })}
             >
               <Image source={require('./../../assets/clientes.png')} style={styles.icon} />
               <Text style={styles.optionText}>Clientes</Text>
             </TouchableOpacity>
-
-
-            
           </View>
 
           {showLog && (syncLogs.length > 0 || Object.keys(totaisSincronizacao).length > 0) && (
