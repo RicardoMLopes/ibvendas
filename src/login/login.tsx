@@ -1,27 +1,27 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  Alert,
   ActivityIndicator,
-  Linking,
   Vibration,
+  Linking,
+  Modal,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import * as Network from 'expo-network';
+import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 
 import api from '../config/app';
 import Configs from '../config/configs';
 import styles from './style';
-import { salvarTokenCNPJ } from '../config/tokenmanager';
 import DatabaseManager from '../database/databasemanager';
 import { useSyncEmpresa } from '../database/sincronizacao';
 import { useDatabaseStore } from '../store/databasestore';
-import { adicionarValor } from '../scripts/adicionarourecuperar';
+import { adicionarValor, recuperarValor } from '../scripts/adicionarourecuperar';
 import { validarSenhaExpo } from '../scripts/funcoes';
-import Constants from 'expo-constants';
 
 type Empresa = {
   codigo: string;
@@ -36,21 +36,91 @@ const formatarDocumento = (doc: string) => {
   return doc;
 };
 
+// Modal de sem internet
+function NoInternetModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
+  return (
+    <Modal transparent visible={visible} animationType="fade">
+      <View style={{ flex:1, justifyContent:'center', alignItems:'center', backgroundColor:'rgba(0,0,0,0.5)' }}>
+        <View style={{ width:'80%', backgroundColor:'#fff', borderRadius:12, padding:20, alignItems:'center' }}>
+          <Ionicons name="cloud-offline-outline" size={48} color="red" />
+          <Text style={{ fontSize:18, fontWeight:'bold', marginVertical:10 }}>Sem conexão</Text>
+          <Text style={{ textAlign:'center', marginBottom:20 }}>
+            Internet necessária para primeiro acesso. Por favor, conecte-se à rede.
+          </Text>
+          <TouchableOpacity
+            style={{ backgroundColor:'#007bff', paddingHorizontal:20, paddingVertical:10, borderRadius:8 }}
+            onPress={onClose}
+          >
+            <Text style={{ color:'#fff', fontWeight:'bold' }}>Fechar</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: string) => void }) {
   const navigation: any = useNavigation();
+
   const [cpfCnpj, setCpfCnpj] = useState('');
+  const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [empresa, setEmpresa] = useState('');
   const [codigoempresa, setEmpresaCodigo] = useState<number>(0);
-  const [username, setUsername] = useState('');
-  const [loading, setLoading] = useState(false);
   const [usuarioEncontrado, setUsuarioEncontrado] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [erroUsuario, setErroUsuario] = useState('');
   const [erroSenha, setErroSenha] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [noInternetVisible, setNoInternetVisible] = useState(false);
+
   const numeroVersao = Constants.expoConfig?.version || '1.0.0';
   const buildNumber = Constants.expoConfig?.ios?.buildNumber || Constants.expoConfig?.android?.versionCode || '1';
 
+  // === LOGIN AUTOMÁTICO AO ABRIR O APP ===
+ useEffect(() => {
+  async function checkLogin() {
+    setLoading(true);
+    try {
+      const savedCnpj = await recuperarValor('@CNPJ');
+      const savedUser = await recuperarValor('@usuario');
+
+      if (savedCnpj && savedUser) {
+        // ABRIR BANCO ANTES DE USAR
+        const baseExiste = await DatabaseManager.databaseExists(savedCnpj);
+        if (baseExiste) {
+          const baseAtual = useDatabaseStore.getState().baseAtual;
+          if (baseAtual !== `${savedCnpj}.db`) {
+            await DatabaseManager.openDatabase(savedCnpj);
+          }
+        } else {
+          console.log('⚠️ Banco não existe. Usuário precisa logar primeiro online.');
+          return;
+        }
+
+        const savedEmpresa = await recuperarValor('@nomeEmpresa');
+        const savedCodigo = await recuperarValor('@empresa');
+
+        setCpfCnpj(savedCnpj);
+        setEmpresa(savedEmpresa || '');
+        setEmpresaCodigo(Number(savedCodigo || 0));
+        setUsername(savedUser);
+        setUsuarioEncontrado(true);
+
+        onLoginSuccess(savedCnpj);
+        navigation.navigate({ name: 'home', params: { cnpj: savedCnpj } });
+      }
+    } catch (err) {
+      console.log('Erro login automático:', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+  checkLogin();
+}, []);
+
+
+  // === BUSCA EMPRESA ===
   async function buscarUsuario(
     cpfCnpj: string,
     setEmpresa: (nome: string) => void,
@@ -58,7 +128,7 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     setCpfCnpj: (cnpj: string) => void,
     setUsuarioEncontrado: (encontrado: boolean) => void,
     setLoading: (loading: boolean) => void
-  ): Promise<void> {
+  ) {
     if (!cpfCnpj) return;
 
     const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
@@ -66,82 +136,86 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
 
     setLoading(true);
     try {
-      const hash = await salvarTokenCNPJ(cnpjLimpo, Configs.SECRET_KEY);
-      console.log('🔐 Hash gerado:', hash);
-
       const baseExiste = await DatabaseManager.databaseExists(cnpjLimpo);
       let empresaObj: Empresa | null = null;
+
+      const networkState = await Network.getNetworkStateAsync();
 
       if (baseExiste) {
         const baseAtual = useDatabaseStore.getState().baseAtual;
         if (baseAtual !== `${cnpjLimpo}.db`) await DatabaseManager.openDatabase(cnpjLimpo);
 
-        // Cria o objeto sync uma vez
         const sync = await useSyncEmpresa();
         const empresas = await sync.ConsultarEmpresa(documento);
 
         if (empresas && empresas.length > 0) {
           empresaObj = empresas[0];
           console.log('✅ Empresa encontrada localmente.');
-
-          // Sincronização só se houver internet
-          const networkState = await Network.getNetworkStateAsync();
           if (networkState.isConnected && networkState.isInternetReachable) {
             try {
               await sync.sincronizarUsuarios();
               await sync.sincronizarVendedores();
-              console.log('✅ Usuários e vendedores sincronizados com a internet.');
             } catch (err) {
-              console.log('⚠️ Erro ao sincronizar usuários/vendedores:', err);
+              console.log('⚠️ Erro sincronizando usuários/vendedores:', err);
             }
-          } else {
-            console.log('⚠️ Sem internet, sincronização de usuários/vendedores pulada.');
           }
-
-          setEmpresa(empresaObj.nome);
-          setEmpresaCodigo(Number(empresaObj.codigo));
-          setCpfCnpj(empresaObj.cnpj || cpfCnpj);
-          setUsuarioEncontrado(true);
-          console.log('✅ Empresa pronta para uso:', empresaObj.nome);
         }
+      }
+
+      if (!baseExiste) {
+        if (!networkState.isConnected || !networkState.isInternetReachable) {
+          setNoInternetVisible(true);
+          return;
+        }
+        await DatabaseManager.openDatabase(cnpjLimpo);
+
+        const empresaRemota = await buscaRemota(cnpjLimpo);
+        if (!empresaRemota) throw new Error('Empresa não encontrada remotamente.');
+        empresaObj = empresaRemota;
+      }
+
+      if (empresaObj) {
+        setEmpresa(empresaObj.nome);
+        setEmpresaCodigo(Number(empresaObj.codigo));
+        setCpfCnpj(empresaObj.cnpj || cpfCnpj);
+        setUsuarioEncontrado(true);
       }
     } catch (error: any) {
       console.log('❌ Erro na busca da empresa:', error.message || error);
-      Alert.alert(
-        'Empresa não encontrada',
-        `Não conseguimos localizar a empresa. Verifique o CNPJ informado: ${documento}`
-      );
       setUsuarioEncontrado(false);
     } finally {
       setLoading(false);
     }
   }
 
+  async function buscaRemota(cnpj: string): Promise<Empresa | null> {
+    try {
+      const response = await api.get(`/empresa/`);
+      if (response.data && response.data.cnpj) {
+        const sync = await useSyncEmpresa();
+        await sync.sincronizarEmpresas();
+        await sync.sincronizarUsuarios();
+        await sync.sincronizarVendedores();
+        return { cnpj: response.data.cnpj, nome: response.data.nome, codigo: response.data.codigo };
+      }
+      return null;
+    } catch (error) {
+      console.log('❌ Erro na busca remota:', error);
+      return null;
+    }
+  }
+
+  const handleBlurBuscar = () => {
+    buscarUsuario(cpfCnpj, setEmpresa, setEmpresaCodigo, setCpfCnpj, setUsuarioEncontrado, setLoading);
+  };
+
+  // === REALIZAR LOGIN ===
   const realizarLogin = async () => {
-    setErroUsuario('');
-    setErroSenha('');
-    setLoginError('');
+    setErroUsuario(''); setErroSenha(''); setLoginError('');
 
-    if (!username.trim()) {
-      setErroUsuario('Preencha o usuário!');
-      Vibration.vibrate(500);
-      setTimeout(() => setErroUsuario(''), 3000);
-      return;
-    }
-
-    if (!password.trim()) {
-      setErroSenha('Preencha a senha!');
-      Vibration.vibrate(500);
-      setTimeout(() => setErroSenha(''), 3000);
-      return;
-    }
-
-    if (!usuarioEncontrado) {
-      setLoginError('Usuário não identificado.');
-      Vibration.vibrate(500);
-      setTimeout(() => setLoginError(''), 3000);
-      return;
-    }
+    if (!username.trim()) { setErroUsuario('Preencha o usuário!'); Vibration.vibrate(500); return; }
+    if (!password.trim()) { setErroSenha('Preencha a senha!'); Vibration.vibrate(500); return; }
+    if (!usuarioEncontrado) { setLoginError('Usuário não identificado.'); Vibration.vibrate(500); return; }
 
     setLoading(true);
     try {
@@ -156,11 +230,12 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
       if (!senhaCorreta) {
         setLoginError('Usuário ou senha inválidos.');
         Vibration.vibrate(500);
-        setTimeout(() => setLoginError(''), 3000);
         return;
       }
 
       const cnpjLimpo = cpfCnpj.replace(/\D/g, '');
+
+      // === SALVAR LOGIN PERMANENTE ===
       await adicionarValor('@IDUSER', resultado.id?.toString() || '0');
       await adicionarValor('@CNPJ', cnpjLimpo);
       await adicionarValor('@empresa', codigoempresa.toString());
@@ -172,36 +247,34 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
     } catch (error) {
       setLoginError('Erro ao acessar banco local.');
       Vibration.vibrate(500);
-      setTimeout(() => setLoginError(''), 3000);
-      console.log('Erro ao validar login local:', error);
-    } finally {
-      setLoading(false);
-    }
+      console.log('Erro login:', error);
+    } finally { setLoading(false); }
   };
 
   const limpar = () => {
-    setCpfCnpj('');
-    setEmpresa('');
-    setEmpresaCodigo(0);
-    setUsername('');
-    setPassword('');
-    setUsuarioEncontrado(false);
-    setErroUsuario('');
-    setErroSenha('');
-    setLoginError('');
+    setCpfCnpj(''); setEmpresa(''); setEmpresaCodigo(0);
+    setUsername(''); setPassword('');
+    setUsuarioEncontrado(false); setErroUsuario(''); setErroSenha(''); setLoginError('');
   };
 
-  const handleBlurBuscar = () => {
-    buscarUsuario(cpfCnpj, setEmpresa, setEmpresaCodigo, setCpfCnpj, setUsuarioEncontrado, setLoading);
-  };
+  // === RENDER ===
+  if (loading) {
+    return (
+      <View style={{ flex:1, justifyContent:'center', alignItems:'center' }}>
+        <ActivityIndicator size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
+      <NoInternetModal visible={noInternetVisible} onClose={() => setNoInternetVisible(false)} />
+
       {!usuarioEncontrado ? (
         <>
           <View style={{ alignItems: 'center', marginBottom: 8 }}>
             <Text style={{ fontSize: 12, color: '#888' }}>
-             Versão {numeroVersao} (Build {buildNumber})
+              Versão {numeroVersao} (Build {buildNumber})
             </Text>
           </View>
           <Text style={styles.fraseReflexiva}>
@@ -254,14 +327,9 @@ export default function Login({ onLoginSuccess }: { onLoginSuccess: (cnpj: strin
             placeholder="Digite sua senha"
           />
           {erroSenha ? <Text style={{ color: 'red', marginBottom: 4 }}>{erroSenha}</Text> : null}
-
           {loginError ? <Text style={{ color: 'red', marginBottom: 8 }}>{loginError}</Text> : null}
 
-          <TouchableOpacity
-            style={styles.button}
-            onPress={realizarLogin}
-            disabled={loading}
-          >
+          <TouchableOpacity style={styles.button} onPress={realizarLogin} disabled={loading}>
             {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Entrar</Text>}
           </TouchableOpacity>
 
